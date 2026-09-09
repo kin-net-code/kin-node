@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+fail() {
+  printf 'FAIL  %s\n' "$*" >&2
+  exit 1
+}
+
+tool_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+engine=${KIN_CONTAINER_ENGINE:-}
+image=${KIN_CONTAINER_TEST_IMAGE:-kin-node-test:local}
+
+if [[ -z "$engine" ]]; then
+  for candidate in docker podman; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      engine=$candidate
+      break
+    fi
+  done
+fi
+
+case "$engine" in
+  docker|podman) ;;
+  '') fail "Docker or Podman is required" ;;
+  *) fail "unsupported container engine: $engine" ;;
+esac
+
+command -v "$engine" >/dev/null 2>&1 || fail "$engine is not installed"
+
+cd "$tool_root"
+"$engine" build --file Containerfile --tag "$image" .
+"$engine" run --rm "$image"
+
+printf 'PASS  KIN_NODE_CONTAINER engine=%s image=%s\n' "$engine" "$image"

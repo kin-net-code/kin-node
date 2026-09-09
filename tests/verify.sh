@@ -12,54 +12,29 @@ ansible_playbook=${KIN_ANSIBLE_PLAYBOOK:-$(command -v ansible-playbook || true)}
 
 executable_sources=(
   "$tool_root/test"
+  "$tool_root/container-test"
   "$tool_root/kin-node"
-  "$tool_root/run"
-  "$tool_root/scripts/base-bootstrap.sh"
-  "$tool_root/scripts/guest-configure.sh"
   "$tool_root/tests/acceptance.sh"
-  "$tool_root/tests/base-vm-acceptance.sh"
+  "$tool_root/tests/container-live.sh"
   "$tool_root/tests/convergence.sh"
-  "$tool_root/tests/guest-source-transfer.sh"
-  "$tool_root/tests/orchestration.sh"
-  "$tool_root/tests/fixtures/bin/vagrant"
-  "$tool_root/tests/fixtures/bin/python3"
-  "$tool_root/tests/fixtures/guest-controller"
 )
 
 for executable_source in "${executable_sources[@]}"; do
   bash -n "$executable_source"
 done
 
-if command -v ruby >/dev/null 2>&1; then
-  ruby -c "$tool_root/Vagrantfile"
-else
-  printf 'SKIP  VAGRANT_RUBY_SYNTAX (ruby unavailable)\n'
-fi
+grep -Fqx 'FROM docker.io/library/ubuntu:26.04' "$tool_root/Containerfile"
+grep -Fq 'ansible-core==2.20.9' "$tool_root/requirements-test.txt"
+grep -Fq 'docker|podman' "$tool_root/container-test"
+grep -Fq 'uses: actions/checkout@v6' "$tool_root/.github/workflows/test.yml"
+grep -Fq 'run: ./container-test' "$tool_root/.github/workflows/test.yml"
 
-grep -Fq 'config.vm.synced_folder ".", "/vagrant", disabled: true' \
-  "$tool_root/Vagrantfile" || {
-  printf 'FAIL  Vagrant must not mount the host checkout into the node\n' >&2
-  exit 1
-}
-grep -Fq 'config.ssh.forward_agent = false' "$tool_root/Vagrantfile" || {
-  printf 'FAIL  Vagrant must not expose the host SSH agent to the guest\n' >&2
-  exit 1
-}
-
-grep -Fq 'TRUSTED_BASE_BOX = "kin/sanitized-ubuntu-26.04"' \
-  "$tool_root/Vagrantfile"
-grep -Fq 'TRUSTED_BASE_BOX_VERSION = "20260823.0"' \
-  "$tool_root/Vagrantfile"
-grep -Fq 'Canonical base provenance rejected; no fallback is configured' \
-  "$tool_root/run"
-
-if grep -ERn 'b[e]nto/' "$tool_root" --exclude-dir=.git; then
-  printf 'FAIL  Bento remains in the Kin Node execution path\n' >&2
-  exit 1
-fi
-
-if grep -Eq 'forwarded_port|public_network|private_network' "$tool_root/Vagrantfile"; then
-  printf 'FAIL  base VM exposes networking beyond Vagrant SSH and NAT egress\n' >&2
+if grep -ERn -i 'vagrant|virtualbox|bento' \
+  "$tool_root/Containerfile" \
+  "$tool_root/container-test" \
+  "$tool_root/kin-node" \
+  "$ansible_root"; then
+  printf 'FAIL  VM implementation leaked into host configuration or container tests\n' >&2
   exit 1
 fi
 
@@ -69,22 +44,12 @@ if grep -En '(\[\[[[:space:]]+-t|test[[:space:]]+-t|tty[[:space:]]+-s|TERM=)' \
   exit 1
 fi
 
-if grep -En '(SSH_AUTH_SOCK|ssh-add|github\.com)' \
-  "$tool_root/scripts/guest-configure.sh" "$tool_root/Vagrantfile"; then
-  printf 'FAIL  the guest path must not receive or use GitHub credentials\n' >&2
-  exit 1
-fi
-
-grep -Fq 'git -C "$repo_root" bundle create' "$tool_root/run"
-grep -Fq 'vagrant upload "$source_bundle"' "$tool_root/run"
-
-python3 -B "$tool_root/tests/test_base_image.py"
-
 dummy_commit=0000000000000000000000000000000000000000
+dummy_node=11111111111111111111111111111111
 for playbook in h0.yml h0-acceptance.yml h1.yml h1-acceptance.yml; do
   ANSIBLE_CONFIG="$ansible_root/ansible.cfg" "$ansible_playbook" \
     --inventory "$ansible_root/inventory.ini" \
-    --extra-vars "{\"kin_source_commit\":\"$dummy_commit\"}" \
+    --extra-vars "{\"kin_source_commit\":\"$dummy_commit\",\"kin_node_id\":\"$dummy_node\"}" \
     --syntax-check "$ansible_root/playbooks/$playbook"
 done
 

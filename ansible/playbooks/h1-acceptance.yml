@@ -55,7 +55,7 @@
           - kin_h1_state.schema == 'kin-config-level-state/v1'
           - kin_h1_state.config_level == 'H1'
           - kin_h1_state.source_commit == kin_source_commit
-          - kin_h1_state.node_id == ansible_machine_id
+          - kin_h1_state.node_id == kin_node_id
         fail_msg: Installed H1 state does not match this checkout or machine.
         quiet: true
 
@@ -75,4 +75,4 @@
 
     - name: Report concise H1 acceptance
       ansible.builtin.debug:
-        msg: "PASS H1 node={{ ansible_machine_id }} source={{ kin_source_commit }}"
+        msg: "PASS H1 node={{ kin_node_id }} source={{ kin_source_commit }}"

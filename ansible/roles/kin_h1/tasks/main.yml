@@ -3,12 +3,10 @@
   ansible.builtin.assert:
     that:
       - ansible_distribution == 'Ubuntu'
-      - ansible_service_mgr == 'systemd'
-      - ansible_virtualization_type not in ['container', 'containerd', 'docker', 'podman']
-      - ansible_machine_id is match('^[0-9a-f]{32}$')
+      - kin_node_id is match('^[0-9a-f]{32}$')
       - ansible_version.full == '2.20.9'
       - kin_source_commit is match('^[0-9a-f]{40}$')
-    fail_msg: H1 MVP supports a clean Ubuntu systemd VM or bare-metal node and an exact Git commit.
+    fail_msg: H1 requires Ubuntu, an exact Git commit and a stable node ID.
     quiet: true
 
 - name: Inspect the required H0 state
@@ -39,7 +37,7 @@
       - kin_h1_prior_state.schema == 'kin-config-level-state/v1'
       - kin_h1_prior_state.config_level in ['H0', 'H1']
       - kin_h1_prior_state.source_commit == kin_source_commit
-      - kin_h1_prior_state.node_id == ansible_machine_id
+      - kin_h1_prior_state.node_id == kin_node_id
     fail_msg: H1 requires matching H0 state from this checkout and machine.
     quiet: true
 
@@ -53,7 +51,7 @@
       {{ {
         'schema': 'kin-config-level-state/v1',
         'config_level': 'H1',
-        'node_id': ansible_machine_id,
+        'node_id': kin_node_id,
         'source_commit': kin_source_commit
       } | to_nice_json }}
 

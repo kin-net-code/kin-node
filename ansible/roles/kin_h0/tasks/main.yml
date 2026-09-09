@@ -3,12 +3,10 @@
   ansible.builtin.assert:
     that:
       - ansible_distribution == 'Ubuntu'
-      - ansible_service_mgr == 'systemd'
-      - ansible_virtualization_type not in ['container', 'containerd', 'docker', 'podman']
-      - ansible_machine_id is match('^[0-9a-f]{32}$')
+      - kin_node_id is match('^[0-9a-f]{32}$')
       - ansible_version.full == '2.20.9'
       - kin_source_commit is match('^[0-9a-f]{40}$')
-    fail_msg: H0 MVP supports a clean Ubuntu systemd VM or bare-metal node, Ansible 2.20.9 and an exact Git commit.
+    fail_msg: H0 requires Ubuntu, Ansible 2.20.9, an exact Git commit and a stable node ID.
     quiet: true
 
 - name: Inspect legacy Kin paths
@@ -72,7 +70,7 @@
       - kin_h0_existing_state.schema == 'kin-config-level-state/v1'
       - kin_h0_existing_state.config_level in ['H0', 'H1']
       - kin_h0_existing_state.source_commit == kin_source_commit
-      - kin_h0_existing_state.node_id == ansible_machine_id
+      - kin_h0_existing_state.node_id == kin_node_id
     fail_msg: Existing Kin state belongs to another level, source commit or machine.
     quiet: true
   when: kin_h0_existing_state_file.stat.exists
@@ -87,7 +85,7 @@
       {{ {
         'schema': 'kin-config-level-state/v1',
         'config_level': 'H0',
-        'node_id': ansible_machine_id,
+        'node_id': kin_node_id,
         'source_commit': kin_source_commit
       } | to_nice_json }}
   when: >-

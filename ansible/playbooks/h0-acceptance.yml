@@ -10,9 +10,7 @@
       ansible.builtin.assert:
         that:
           - ansible_distribution == 'Ubuntu'
-          - ansible_service_mgr == 'systemd'
-          - ansible_virtualization_type not in ['container', 'containerd', 'docker', 'podman']
-          - ansible_machine_id is match('^[0-9a-f]{32}$')
+          - kin_node_id is match('^[0-9a-f]{32}$')
           - ansible_version.full == '2.20.9'
           - kin_source_commit is match('^[0-9a-f]{40}$')
         fail_msg: H0 acceptance requires the supported platform, runtime and exact source commit.
@@ -85,7 +83,7 @@
           - kin_h0_accepted_state.schema == 'kin-config-level-state/v1'
           - kin_h0_accepted_state.config_level in ['H0', 'H1']
           - kin_h0_accepted_state.source_commit == kin_source_commit
-          - kin_h0_accepted_state.node_id == ansible_machine_id
+          - kin_h0_accepted_state.node_id == kin_node_id
         fail_msg: Installed state does not satisfy this checkout's H0 contract.
         quiet: true
 
@@ -104,6 +102,6 @@
     - name: Report concise H0 acceptance
       ansible.builtin.debug:
         msg: >-
-          PASS H0 node={{ ansible_machine_id }}
+          PASS H0 node={{ kin_node_id }}
           source={{ kin_source_commit }}
           current={{ kin_h0_accepted_state.config_level }}
