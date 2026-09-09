@@ -1,6 +1,7 @@
 ---
 kin_source_commit: ""
 kin_node_id: "{{ ansible_machine_id | default('') }}"
+kin_target_distribution: "{{ ansible_facts['distribution'] | default('') }}"
 kin_config_dir: /etc/kin-net
 kin_state_dir: /var/lib/kin-net
 kin_state_file: /var/lib/kin-net/config-level.json

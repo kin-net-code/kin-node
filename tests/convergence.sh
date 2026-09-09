@@ -13,7 +13,7 @@ ansible_playbook=${KIN_ANSIBLE_PLAYBOOK:-$(command -v ansible-playbook || true)}
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/kin-node-convergence.XXXXXX")
 mkdir -p "$test_root/usr/local/bin"
 
-test_vars=$(printf '{"kin_source_commit":"1111111111111111111111111111111111111111","ansible_distribution":"Ubuntu","kin_node_id":"22222222222222222222222222222222","kin_config_dir":"%s/etc/kin-net","kin_state_dir":"%s/var/lib/kin-net","kin_state_file":"%s/var/lib/kin-net/config-level.json","kin_status_command":"%s/usr/local/bin/kin-node-status","kin_legacy_paths":[],"kin_h0_manage_packages":false}' \
+test_vars=$(printf '{"kin_source_commit":"1111111111111111111111111111111111111111","kin_target_distribution":"Ubuntu","kin_node_id":"22222222222222222222222222222222","kin_config_dir":"%s/etc/kin-net","kin_state_dir":"%s/var/lib/kin-net","kin_state_file":"%s/var/lib/kin-net/config-level.json","kin_status_command":"%s/usr/local/bin/kin-node-status","kin_legacy_paths":[],"kin_h0_manage_packages":false}' \
   "$test_root" "$test_root" "$test_root" "$test_root")
 
 run_playbook() {

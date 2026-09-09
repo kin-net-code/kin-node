@@ -2,7 +2,7 @@
 - name: Require the deliberately narrow H0 platform
   ansible.builtin.assert:
     that:
-      - ansible_distribution == 'Ubuntu'
+      - kin_target_distribution == 'Ubuntu'
       - kin_node_id is match('^[0-9a-f]{32}$')
       - ansible_version.full == '2.20.9'
       - kin_source_commit is match('^[0-9a-f]{40}$')

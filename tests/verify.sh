@@ -49,7 +49,7 @@ dummy_node=11111111111111111111111111111111
 for playbook in h0.yml h0-acceptance.yml h1.yml h1-acceptance.yml; do
   ANSIBLE_CONFIG="$ansible_root/ansible.cfg" "$ansible_playbook" \
     --inventory "$ansible_root/inventory.ini" \
-    --extra-vars "{\"kin_source_commit\":\"$dummy_commit\",\"kin_node_id\":\"$dummy_node\"}" \
+    --extra-vars "{\"kin_source_commit\":\"$dummy_commit\",\"kin_node_id\":\"$dummy_node\",\"kin_target_distribution\":\"Ubuntu\"}" \
     --syntax-check "$ansible_root/playbooks/$playbook"
 done
 

@@ -22,11 +22,20 @@ run_playbook() {
     "$@"
 }
 
+run_logged() {
+  local log=$1
+  shift
+  if ! run_playbook "$@" > "$log" 2>&1; then
+    cat "$log" >&2
+    return 1
+  fi
+}
+
 "$tool_root/test"
 
-run_playbook "$ansible_root/playbooks/h0.yml" > "$test_root/h0-first.log"
-run_playbook "$ansible_root/playbooks/h0-acceptance.yml" > "$test_root/h0-accept.log"
-run_playbook "$ansible_root/playbooks/h0.yml" > "$test_root/h0-second.log"
+run_logged "$test_root/h0-first.log" "$ansible_root/playbooks/h0.yml"
+run_logged "$test_root/h0-accept.log" "$ansible_root/playbooks/h0-acceptance.yml"
+run_logged "$test_root/h0-second.log" "$ansible_root/playbooks/h0.yml"
 
 h0_second_recap=$(grep -E '^localhost +:' "$test_root/h0-second.log")
 [[ "$h0_second_recap" == *'changed=0'* && "$h0_second_recap" == *'failed=0'* ]] || {
@@ -34,9 +43,9 @@ h0_second_recap=$(grep -E '^localhost +:' "$test_root/h0-second.log")
   exit 1
 }
 
-run_playbook "$ansible_root/playbooks/h1.yml" > "$test_root/h1-first.log"
-run_playbook "$ansible_root/playbooks/h1-acceptance.yml" > "$test_root/h1-accept.log"
-run_playbook "$ansible_root/playbooks/h1.yml" > "$test_root/h1-second.log"
+run_logged "$test_root/h1-first.log" "$ansible_root/playbooks/h1.yml"
+run_logged "$test_root/h1-accept.log" "$ansible_root/playbooks/h1-acceptance.yml"
+run_logged "$test_root/h1-second.log" "$ansible_root/playbooks/h1.yml"
 
 h1_second_recap=$(grep -E '^localhost +:' "$test_root/h1-second.log")
 [[ "$h1_second_recap" == *'changed=0'* && "$h1_second_recap" == *'failed=0'* ]] || {
