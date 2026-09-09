@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+fail() {
+  printf 'FAIL  %s\n' "$*" >&2
+  exit 1
+}
+
+tool_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+
+for required_command in git vagrant VBoxManage; do
+  command -v "$required_command" >/dev/null 2>&1 || \
+    fail "$required_command is required on the VM host"
+done
+
+repo_root=$(git -C "$tool_root" rev-parse --show-toplevel 2>/dev/null) || \
+  fail "run this command from a Git checkout"
+
+git -C "$repo_root" diff --quiet || fail "checkout has unstaged changes"
+git -C "$repo_root" diff --cached --quiet || fail "checkout has staged changes"
+[[ -z "$(git -C "$repo_root" ls-files --others --exclude-standard)" ]] || \
+  fail "checkout has untracked files"
+
+source_branch=$(git -C "$repo_root" symbolic-ref --quiet --short HEAD) || \
+  fail "deployment requires a named Git branch, not detached HEAD"
+git -C "$repo_root" check-ref-format --branch "$source_branch" >/dev/null || \
+  fail "source branch is not valid"
+[[ "$source_branch" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$ ]] || \
+  fail "source branch contains unsupported characters"
+[[ "$source_branch" != *..* && "$source_branch" != */ && "$source_branch" != *//* ]] || \
+  fail "source branch contains an unsafe path component"
+
+source_commit=$(git -C "$repo_root" rev-parse --verify HEAD)
+[[ "$source_commit" =~ ^[0-9a-f]{40}$ ]] || fail "cannot resolve an exact source commit"
+
+origin_commit=$(git -C "$repo_root" rev-parse --verify "refs/remotes/origin/$source_branch" 2>/dev/null) || \
+  fail "origin/$source_branch is absent; fetch or push the branch first"
+[[ "$source_commit" == "$origin_commit" ]] || \
+  fail "HEAD differs from origin/$source_branch; deploy only pushed GitHub state"
+
+bundle_dir=$(mktemp -d "${TMPDIR:-/tmp}/kin-node-source.XXXXXX")
+source_bundle="$bundle_dir/kin-node-source.bundle"
+
+cleanup() {
+  if [[ -e "$source_bundle" ]]; then
+    unlink -- "$source_bundle"
+  fi
+  if [[ -d "$bundle_dir" ]]; then
+    rmdir -- "$bundle_dir" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+
+git -C "$repo_root" bundle create "$source_bundle" "refs/heads/$source_branch"
+git -C "$repo_root" bundle verify "$source_bundle"
+
+cd "$tool_root"
+vagrant validate
+vagrant up --provider=virtualbox
+"$tool_root/tests/base-vm-acceptance.sh"
+
+vagrant upload "$source_bundle" /tmp/kin-node-source.bundle
+vagrant upload "$tool_root/scripts/guest-configure.sh" /tmp/kin-node-guest-configure.sh
+
+guest_command="bash /tmp/kin-node-guest-configure.sh '$source_branch' '$source_commit'"
+vagrant ssh --command "$guest_command"
+
+printf 'PASS  VAGRANT_H1 vm=%s source=%s\n' \
+  "${KIN_NODE_VM_NAME:-kin-node}" "$source_commit"

@@ -1,0 +1,109 @@
+---
+- name: Accept Kin config level H0 or a compatible later level
+  hosts: kin_node
+  become: true
+  gather_facts: true
+  any_errors_fatal: true
+
+  tasks:
+    - name: Validate the H0 acceptance inputs
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == 'Ubuntu'
+          - ansible_service_mgr == 'systemd'
+          - ansible_virtualization_type not in ['container', 'containerd', 'docker', 'podman']
+          - ansible_machine_id is match('^[0-9a-f]{32}$')
+          - ansible_version.full == '2.20.9'
+          - kin_source_commit is match('^[0-9a-f]{40}$')
+        fail_msg: H0 acceptance requires the supported platform, runtime and exact source commit.
+        quiet: true
+
+    - name: Gather installed package facts
+      ansible.builtin.package_facts:
+        manager: auto
+      when: kin_h0_manage_packages | bool
+
+    - name: Require the H0 base packages
+      ansible.builtin.assert:
+        that:
+          - item in ansible_facts.packages
+        fail_msg: "Required H0 package is absent: {{ item }}"
+        quiet: true
+      loop: "{{ kin_h0_packages }}"
+      when: kin_h0_manage_packages | bool
+
+    - name: Inspect the H0 directories
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ kin_config_dir }}"
+        - "{{ kin_state_dir }}"
+      register: kin_h0_directory_stats
+
+    - name: Require the H0 directories and permissions
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isdir
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'root'
+          - item.stat.mode == '0755'
+        fail_msg: "H0 directory or permissions are wrong: {{ item.item }}"
+        quiet: true
+      loop: "{{ kin_h0_directory_stats.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Inspect the config-level record
+      ansible.builtin.stat:
+        path: "{{ kin_state_file }}"
+      register: kin_h0_state_file_stat
+
+    - name: Require a root-owned config-level record
+      ansible.builtin.assert:
+        that:
+          - kin_h0_state_file_stat.stat.exists
+          - kin_h0_state_file_stat.stat.isreg
+          - kin_h0_state_file_stat.stat.pw_name == 'root'
+          - kin_h0_state_file_stat.stat.gr_name == 'root'
+          - kin_h0_state_file_stat.stat.mode == '0644'
+        fail_msg: H0 config-level record or permissions are wrong.
+        quiet: true
+
+    - name: Read the config-level record
+      ansible.builtin.slurp:
+        src: "{{ kin_state_file }}"
+      register: kin_h0_state_raw
+
+    - name: Decode the config-level record
+      ansible.builtin.set_fact:
+        kin_h0_accepted_state: "{{ kin_h0_state_raw.content | b64decode | from_json }}"
+
+    - name: Require the installed H0 contract
+      ansible.builtin.assert:
+        that:
+          - kin_h0_accepted_state.schema == 'kin-config-level-state/v1'
+          - kin_h0_accepted_state.config_level in ['H0', 'H1']
+          - kin_h0_accepted_state.source_commit == kin_source_commit
+          - kin_h0_accepted_state.node_id == ansible_machine_id
+        fail_msg: Installed state does not satisfy this checkout's H0 contract.
+        quiet: true
+
+    - name: Inspect the H1 status command boundary
+      ansible.builtin.stat:
+        path: "{{ kin_status_command }}"
+      register: kin_h0_status_file_stat
+
+    - name: Require H1 capability to remain absent at exact H0
+      ansible.builtin.assert:
+        that:
+          - kin_h0_accepted_state.config_level != 'H0' or not kin_h0_status_file_stat.stat.exists
+        fail_msg: H1 status capability appeared before H1 was applied.
+        quiet: true
+
+    - name: Report concise H0 acceptance
+      ansible.builtin.debug:
+        msg: >-
+          PASS H0 node={{ ansible_machine_id }}
+          source={{ kin_source_commit }}
+          current={{ kin_h0_accepted_state.config_level }}

@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+
+"$repo_root/tests/verify.sh"
+"$repo_root/tests/convergence.sh"
+"$repo_root/tests/guest-source-transfer.sh"
+"$repo_root/tests/orchestration.sh"
+
+printf 'PASS  KIN_NODE_FAST_SUITE\n'

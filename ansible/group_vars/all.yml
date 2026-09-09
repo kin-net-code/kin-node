@@ -1,0 +1,25 @@
+---
+kin_source_commit: ""
+kin_config_dir: /etc/kin-net
+kin_state_dir: /var/lib/kin-net
+kin_state_file: /var/lib/kin-net/config-level.json
+kin_status_command: /usr/local/bin/kin-node-status
+
+kin_h0_manage_packages: true
+kin_h0_packages:
+  - ca-certificates
+  - git
+  - python3
+  - python3-venv
+
+kin_legacy_paths:
+  - /etc/kin-node
+  - /opt/kin-node
+  - /etc/kin-tunnel
+  - /var/lib/kin-tunnel-client
+  - /etc/systemd/system/kin-bus.service
+  - /etc/systemd/system/kin-worker.service
+  - /etc/systemd/system/kin-tunnel.service
+  - /etc/systemd/system/openbao.service
+  - /usr/lib/systemd/system/openbao.service
+  - /lib/systemd/system/openbao.service

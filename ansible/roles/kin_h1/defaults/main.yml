@@ -1,0 +1,6 @@
+---
+kin_source_commit: ""
+kin_config_dir: /etc/kin-net
+kin_state_dir: /var/lib/kin-net
+kin_state_file: /var/lib/kin-net/config-level.json
+kin_status_command: /usr/local/bin/kin-node-status

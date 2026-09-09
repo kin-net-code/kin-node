@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+: "${KIN_TEST_GUEST_LOG:?KIN_TEST_GUEST_LOG is required}"
+printf '%s\n' "${1:-}" >> "$KIN_TEST_GUEST_LOG"
+
+if [[ "${1:-}" == status ]]; then
+  printf '{"config_level":"H1"}\n'
+fi

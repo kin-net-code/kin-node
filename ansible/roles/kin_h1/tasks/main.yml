@@ -1,0 +1,69 @@
+---
+- name: Require the deliberately narrow H1 platform
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution == 'Ubuntu'
+      - ansible_service_mgr == 'systemd'
+      - ansible_virtualization_type not in ['container', 'containerd', 'docker', 'podman']
+      - ansible_machine_id is match('^[0-9a-f]{32}$')
+      - ansible_version.full == '2.20.9'
+      - kin_source_commit is match('^[0-9a-f]{40}$')
+    fail_msg: H1 MVP supports a clean Ubuntu systemd VM or bare-metal node and an exact Git commit.
+    quiet: true
+
+- name: Inspect the required H0 state
+  ansible.builtin.stat:
+    path: "{{ kin_state_file }}"
+  register: kin_h1_prior_state_file
+
+- name: Require H0 before H1
+  ansible.builtin.assert:
+    that:
+      - kin_h1_prior_state_file.stat.exists
+      - kin_h1_prior_state_file.stat.isreg
+    fail_msg: H1 requires an accepted H0 state; apply and test H0 first.
+    quiet: true
+
+- name: Read the required H0 state
+  ansible.builtin.slurp:
+    src: "{{ kin_state_file }}"
+  register: kin_h1_prior_state_raw
+
+- name: Decode the required H0 state
+  ansible.builtin.set_fact:
+    kin_h1_prior_state: "{{ kin_h1_prior_state_raw.content | b64decode | from_json }}"
+
+- name: Require a matching H0 or idempotent H1 state
+  ansible.builtin.assert:
+    that:
+      - kin_h1_prior_state.schema == 'kin-config-level-state/v1'
+      - kin_h1_prior_state.config_level in ['H0', 'H1']
+      - kin_h1_prior_state.source_commit == kin_source_commit
+      - kin_h1_prior_state.node_id == ansible_machine_id
+    fail_msg: H1 requires matching H0 state from this checkout and machine.
+    quiet: true
+
+- name: Record the accepted source and machine identity
+  ansible.builtin.copy:
+    dest: "{{ kin_state_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      {{ {
+        'schema': 'kin-config-level-state/v1',
+        'config_level': 'H1',
+        'node_id': ansible_machine_id,
+        'source_commit': kin_source_commit
+      } | to_nice_json }}
+
+- name: Install the minimal status interface
+  ansible.builtin.copy:
+    dest: "{{ kin_status_command }}"
+    owner: root
+    group: root
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      set -eu
+      exec /bin/cat {{ kin_state_file | quote }}

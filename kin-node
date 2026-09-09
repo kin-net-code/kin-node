@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+fail() {
+  printf 'FAIL  %s\n' "$*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'EOF'
+Usage: kin-node ACTION
+
+  check-h0   Show what the H0 playbook would change.
+  apply-h0   Apply H0, then immediately test the H0 contract.
+  accept-h0  Re-run the read-only H0 acceptance playbook.
+  check-h1   Require H0, then show what H1 would change.
+  apply-h1   Require H0, apply H1, then immediately test H1.
+  accept-h1  Re-run the read-only H1 acceptance playbook.
+  status     Print the installed machine-readable H1 record.
+EOF
+}
+
+tool_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+ansible_root="$tool_root/ansible"
+inventory="$ansible_root/inventory.ini"
+config="$ansible_root/ansible.cfg"
+
+action=${1:-}
+case "$action" in
+  check-h0|apply-h0|accept-h0|check-h1|apply-h1|accept-h1|status) ;;
+  -h|--help|help|'') usage; exit 0 ;;
+  *) usage >&2; fail "unknown action: $action" ;;
+esac
+
+if [[ "$action" == status ]]; then
+  [[ -x /usr/local/bin/kin-node-status ]] || fail "H1 status is not installed"
+  exec /usr/local/bin/kin-node-status
+fi
+
+command -v git >/dev/null 2>&1 || fail "git is required"
+ansible_playbook=${KIN_ANSIBLE_PLAYBOOK:-$(command -v ansible-playbook || true)}
+[[ -n "$ansible_playbook" ]] || fail "ansible-playbook is required"
+[[ "$ansible_playbook" = /* ]] || fail "ansible-playbook must resolve to an absolute path"
+
+repo_root=$(git -C "$tool_root" rev-parse --show-toplevel 2>/dev/null) || \
+  fail "run this command from a Git checkout"
+
+git -C "$repo_root" diff --quiet || fail "checkout has unstaged changes"
+git -C "$repo_root" diff --cached --quiet || fail "checkout has staged changes"
+[[ -z "$(git -C "$repo_root" ls-files --others --exclude-standard)" ]] || \
+  fail "checkout has untracked files"
+
+source_commit=$(git -C "$repo_root" rev-parse --verify HEAD)
+[[ "$source_commit" =~ ^[0-9a-f]{40}$ ]] || fail "cannot resolve an exact source commit"
+
+extra_vars="{\"kin_source_commit\":\"$source_commit\"}"
+ansible=(
+  "$ansible_playbook"
+  --inventory "$inventory"
+  --extra-vars "$extra_vars"
+)
+
+run_as_root() {
+  sudo -n env ANSIBLE_CONFIG="$config" "${ansible[@]}" "$@"
+}
+
+syntax_check() {
+  ANSIBLE_CONFIG="$config" "$ansible_playbook" \
+    --inventory "$inventory" \
+    --extra-vars "$extra_vars" \
+    --syntax-check "$1"
+}
+
+sudo -n true 2>/dev/null || fail "passwordless sudo is required"
+
+case "$action" in
+  check-h0)
+    syntax_check "$ansible_root/playbooks/h0.yml"
+    run_as_root --check --diff "$ansible_root/playbooks/h0.yml"
+    printf 'PASS  H0_CHECK source=%s\n' "$source_commit"
+    ;;
+  apply-h0)
+    run_as_root "$ansible_root/playbooks/h0.yml"
+    run_as_root "$ansible_root/playbooks/h0-acceptance.yml"
+    printf 'PASS  H0_APPLY source=%s\n' "$source_commit"
+    ;;
+  accept-h0)
+    run_as_root "$ansible_root/playbooks/h0-acceptance.yml"
+    printf 'PASS  H0_ACCEPTANCE source=%s\n' "$source_commit"
+    ;;
+  check-h1)
+    run_as_root "$ansible_root/playbooks/h0-acceptance.yml"
+    syntax_check "$ansible_root/playbooks/h1.yml"
+    run_as_root --check --diff "$ansible_root/playbooks/h1.yml"
+    printf 'PASS  H1_CHECK source=%s\n' "$source_commit"
+    ;;
+  apply-h1)
+    run_as_root "$ansible_root/playbooks/h0-acceptance.yml"
+    run_as_root "$ansible_root/playbooks/h1.yml"
+    run_as_root "$ansible_root/playbooks/h1-acceptance.yml"
+    printf 'PASS  H1_APPLY source=%s\n' "$source_commit"
+    ;;
+  accept-h1)
+    run_as_root "$ansible_root/playbooks/h0-acceptance.yml"
+    run_as_root "$ansible_root/playbooks/h1-acceptance.yml"
+    printf 'PASS  H1_ACCEPTANCE source=%s\n' "$source_commit"
+    ;;
+esac

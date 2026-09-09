@@ -1,0 +1,78 @@
+---
+- name: Accept Kin config level H1
+  hosts: kin_node
+  become: true
+  gather_facts: true
+  any_errors_fatal: true
+
+  tasks:
+    - name: Validate the expected source revision
+      ansible.builtin.assert:
+        that:
+          - kin_source_commit is match('^[0-9a-f]{40}$')
+        fail_msg: H1 acceptance requires an exact lowercase Git commit.
+        quiet: true
+
+    - name: Inspect the H1 state record
+      ansible.builtin.stat:
+        path: "{{ kin_state_file }}"
+      register: kin_h1_state_file_stat
+
+    - name: Inspect the H1 status command
+      ansible.builtin.stat:
+        path: "{{ kin_status_command }}"
+      register: kin_h1_status_file_stat
+
+    - name: Require the H1 artifacts and permissions
+      ansible.builtin.assert:
+        that:
+          - kin_h1_state_file_stat.stat.exists
+          - kin_h1_state_file_stat.stat.isreg
+          - kin_h1_state_file_stat.stat.pw_name == 'root'
+          - kin_h1_state_file_stat.stat.gr_name == 'root'
+          - kin_h1_state_file_stat.stat.mode == '0644'
+          - kin_h1_status_file_stat.stat.exists
+          - kin_h1_status_file_stat.stat.isreg
+          - kin_h1_status_file_stat.stat.executable
+          - kin_h1_status_file_stat.stat.pw_name == 'root'
+          - kin_h1_status_file_stat.stat.gr_name == 'root'
+          - kin_h1_status_file_stat.stat.mode == '0755'
+        fail_msg: H1 files or permissions are wrong.
+        quiet: true
+
+    - name: Read the H1 state record
+      ansible.builtin.slurp:
+        src: "{{ kin_state_file }}"
+      register: kin_h1_state_raw
+
+    - name: Decode the H1 state record
+      ansible.builtin.set_fact:
+        kin_h1_state: "{{ kin_h1_state_raw.content | b64decode | from_json }}"
+
+    - name: Require the installed H1 state
+      ansible.builtin.assert:
+        that:
+          - kin_h1_state.schema == 'kin-config-level-state/v1'
+          - kin_h1_state.config_level == 'H1'
+          - kin_h1_state.source_commit == kin_source_commit
+          - kin_h1_state.node_id == ansible_machine_id
+        fail_msg: Installed H1 state does not match this checkout or machine.
+        quiet: true
+
+    - name: Run the human and machine status interface
+      ansible.builtin.command:
+        argv:
+          - "{{ kin_status_command }}"
+      register: kin_h1_status
+      changed_when: false
+
+    - name: Require status to report the accepted state
+      ansible.builtin.assert:
+        that:
+          - (kin_h1_status.stdout | from_json) == kin_h1_state
+        fail_msg: kin-node-status did not return the accepted H1 state.
+        quiet: true
+
+    - name: Report concise H1 acceptance
+      ansible.builtin.debug:
+        msg: "PASS H1 node={{ ansible_machine_id }} source={{ kin_source_commit }}"

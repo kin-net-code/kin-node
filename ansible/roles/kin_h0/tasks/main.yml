@@ -1,0 +1,95 @@
+---
+- name: Require the deliberately narrow H0 platform
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution == 'Ubuntu'
+      - ansible_service_mgr == 'systemd'
+      - ansible_virtualization_type not in ['container', 'containerd', 'docker', 'podman']
+      - ansible_machine_id is match('^[0-9a-f]{32}$')
+      - ansible_version.full == '2.20.9'
+      - kin_source_commit is match('^[0-9a-f]{40}$')
+    fail_msg: H0 MVP supports a clean Ubuntu systemd VM or bare-metal node, Ansible 2.20.9 and an exact Git commit.
+    quiet: true
+
+- name: Inspect legacy Kin paths
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: "{{ kin_legacy_paths }}"
+  register: kin_h0_legacy_state
+  loop_control:
+    label: "{{ item }}"
+
+- name: Refuse to configure over an old node
+  ansible.builtin.assert:
+    that:
+      - not item.stat.exists
+    fail_msg: "Legacy Kin state exists at {{ item.item }}; use a fresh target for this MVP."
+    quiet: true
+  loop: "{{ kin_h0_legacy_state.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Install the H0 base packages
+  ansible.builtin.apt:
+    name: "{{ kin_h0_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+    install_recommends: false
+  when: kin_h0_manage_packages | bool
+
+- name: Create the H0 directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ kin_config_dir }}"
+    - "{{ kin_state_dir }}"
+
+- name: Inspect an existing config-level record
+  ansible.builtin.stat:
+    path: "{{ kin_state_file }}"
+  register: kin_h0_existing_state_file
+
+- name: Read an existing config-level record
+  ansible.builtin.slurp:
+    src: "{{ kin_state_file }}"
+  register: kin_h0_existing_state_raw
+  when: kin_h0_existing_state_file.stat.exists
+
+- name: Decode an existing config-level record
+  ansible.builtin.set_fact:
+    kin_h0_existing_state: >-
+      {{ kin_h0_existing_state_raw.content | b64decode | from_json }}
+  when: kin_h0_existing_state_file.stat.exists
+
+- name: Refuse an incompatible existing config level
+  ansible.builtin.assert:
+    that:
+      - kin_h0_existing_state.schema == 'kin-config-level-state/v1'
+      - kin_h0_existing_state.config_level in ['H0', 'H1']
+      - kin_h0_existing_state.source_commit == kin_source_commit
+      - kin_h0_existing_state.node_id == ansible_machine_id
+    fail_msg: Existing Kin state belongs to another level, source commit or machine.
+    quiet: true
+  when: kin_h0_existing_state_file.stat.exists
+
+- name: Record H0 without downgrading H1
+  ansible.builtin.copy:
+    dest: "{{ kin_state_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      {{ {
+        'schema': 'kin-config-level-state/v1',
+        'config_level': 'H0',
+        'node_id': ansible_machine_id,
+        'source_commit': kin_source_commit
+      } | to_nice_json }}
+  when: >-
+    not kin_h0_existing_state_file.stat.exists or
+    kin_h0_existing_state.config_level == 'H0'
