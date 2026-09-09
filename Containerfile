@@ -11,7 +11,7 @@ RUN apt-get update \
       python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /opt/kin-node
+WORKDIR /workspace/kin-node
 COPY requirements-test.txt ./
 
 RUN python3 -m venv /opt/kin-node-test \

@@ -24,6 +24,7 @@ for executable_source in "${executable_sources[@]}"; do
 done
 
 grep -Fqx 'FROM docker.io/library/ubuntu:26.04' "$tool_root/Containerfile"
+grep -Fqx 'WORKDIR /workspace/kin-node' "$tool_root/Containerfile"
 grep -Fq 'ansible-core==2.20.9' "$tool_root/requirements-test.txt"
 grep -Fq 'docker|podman' "$tool_root/container-test"
 grep -Fq 'uses: actions/checkout@v6' "$tool_root/.github/workflows/test.yml"
