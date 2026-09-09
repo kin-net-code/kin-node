@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+: "${KIN_TEST_VAGRANT_LOG:?KIN_TEST_VAGRANT_LOG is required}"
+
+if [[ "${1:-}" == -B && "${2:-}" == */host/verify_canonical_base.py ]]; then
+  [[ "${3:-}" == */kin-VAGRANTSLASH-sanitized-ubuntu-26.04/20260823.0/virtualbox ]]
+  [[ "${4:-}" == 20260823.0 ]]
+  [[ "${5:-}" == /var/lib/kin-base-images/kin-sanitized-ubuntu-26.04.json ]]
+  printf 'canonical-base %s %s %s\n' "$3" "$4" "$5" >> "$KIN_TEST_VAGRANT_LOG"
+  printf 'PASS  Canonical base provenance verified: orchestration fixture\n'
+  exit 0
+fi
+
+exec /usr/bin/python3 "$@"

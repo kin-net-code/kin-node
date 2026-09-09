@@ -2,9 +2,18 @@
 
 # This file constructs only the base VM. The host-side deployer transfers an
 # exact Git bundle, then runs the same H0 and H1 roles used on bare metal.
+TRUSTED_BASE_BOX = "kin/sanitized-ubuntu-26.04"
+TRUSTED_BASE_BOX_VERSION = "20260823.0"
+BASE_BOX = ENV.fetch("KIN_NODE_BOX", TRUSTED_BASE_BOX)
+BASE_BOX_VERSION = ENV.fetch("KIN_NODE_BOX_VERSION", TRUSTED_BASE_BOX_VERSION)
+
+unless BASE_BOX == TRUSTED_BASE_BOX && BASE_BOX_VERSION == TRUSTED_BASE_BOX_VERSION
+  raise "only the admitted Canonical-derived Kin Ubuntu 26.04 base is permitted; no fallback is configured"
+end
+
 Vagrant.configure("2") do |config|
-  config.vm.box = ENV.fetch("KIN_NODE_BOX", "bento/ubuntu-26.04")
-  config.vm.box_version = ENV.fetch("KIN_NODE_BOX_VERSION", "202606.01.0")
+  config.vm.box = BASE_BOX
+  config.vm.box_version = BASE_BOX_VERSION
   config.vm.box_check_update = false
   config.vm.hostname = "kin-node"
 

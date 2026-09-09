@@ -22,6 +22,7 @@ executable_sources=(
   "$tool_root/tests/guest-source-transfer.sh"
   "$tool_root/tests/orchestration.sh"
   "$tool_root/tests/fixtures/bin/vagrant"
+  "$tool_root/tests/fixtures/bin/python3"
   "$tool_root/tests/fixtures/guest-controller"
 )
 
@@ -45,6 +46,18 @@ grep -Fq 'config.ssh.forward_agent = false' "$tool_root/Vagrantfile" || {
   exit 1
 }
 
+grep -Fq 'TRUSTED_BASE_BOX = "kin/sanitized-ubuntu-26.04"' \
+  "$tool_root/Vagrantfile"
+grep -Fq 'TRUSTED_BASE_BOX_VERSION = "20260823.0"' \
+  "$tool_root/Vagrantfile"
+grep -Fq 'Canonical base provenance rejected; no fallback is configured' \
+  "$tool_root/run"
+
+if grep -ERn 'b[e]nto/' "$tool_root" --exclude-dir=.git; then
+  printf 'FAIL  Bento remains in the Kin Node execution path\n' >&2
+  exit 1
+fi
+
 if grep -Eq 'forwarded_port|public_network|private_network' "$tool_root/Vagrantfile"; then
   printf 'FAIL  base VM exposes networking beyond Vagrant SSH and NAT egress\n' >&2
   exit 1
@@ -64,6 +77,8 @@ fi
 
 grep -Fq 'git -C "$repo_root" bundle create' "$tool_root/run"
 grep -Fq 'vagrant upload "$source_bundle"' "$tool_root/run"
+
+python3 -B "$tool_root/tests/test_base_image.py"
 
 dummy_commit=0000000000000000000000000000000000000000
 for playbook in h0.yml h0-acceptance.yml h1.yml h1-acceptance.yml; do

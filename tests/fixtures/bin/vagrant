@@ -7,6 +7,10 @@ printf '%s\n' "$*" >> "$KIN_TEST_VAGRANT_LOG"
 case "${1:-}" in
   validate|up)
     ;;
+  box)
+    [[ "${2:-}" == list ]]
+    printf '%s\n' "${KIN_TEST_VAGRANT_BOX_LIST:-kin/sanitized-ubuntu-26.04 (virtualbox, 20260823.0)}"
+    ;;
   upload)
     [[ -f "${2:-}" ]]
     if [[ "${3:-}" == /tmp/kin-node-source.bundle ]]; then
