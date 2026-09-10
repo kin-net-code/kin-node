@@ -20,7 +20,6 @@ executable_sources=(
   "$tool_root/tests/convergence.sh"
   "$tool_root/tests/migration.sh"
   "$tool_root/tests/systemd-migration.sh"
-  "$tool_root/tests/systemd-migration.sh"
 )
 
 for executable_source in "${executable_sources[@]}"; do
