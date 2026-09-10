@@ -1,0 +1,178 @@
+---
+- name: Require a stopped and disabled service boundary before capture
+  ansible.builtin.assert:
+    that:
+      - item.state != 'running'
+      - item.status in ['disabled', 'masked', 'static', 'absent']
+    fail_msg: "Legacy service is not inert before capture: {{ item.name }}"
+    quiet: true
+  loop: "{{ kin_m0_service_report }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: kin_m0_manage_services | bool
+
+- name: Require legacy state to capture
+  ansible.builtin.assert:
+    that:
+      - kin_m0_found_paths | length > 0
+      - not kin_m0_archive_exists
+      - not kin_m0_capture_receipt_exists
+    fail_msg: M0 capture requires discovered legacy paths and no pre-existing capture artifacts.
+    quiet: true
+
+- name: Create the private migration directory
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ kin_state_dir }}", mode: "0755"}
+    - {path: "{{ kin_m0_root }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Measure the legacy state before capture
+  ansible.builtin.command:
+    argv: "{{ ['/usr/bin/du', '--summarize', '--bytes', '--'] + kin_m0_found_paths }}"
+  register: kin_m0_du
+  changed_when: false
+
+- name: Read free bytes at the migration destination
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/df
+      - --output=avail
+      - --block-size=1
+      - "{{ kin_m0_root }}"
+  register: kin_m0_df
+  changed_when: false
+
+- name: Calculate the capture space gate
+  ansible.builtin.set_fact:
+    kin_m0_source_bytes: >-
+      {{ kin_m0_du.stdout_lines
+         | map('regex_replace', '^([0-9]+).*$', '\1')
+         | map('int')
+         | sum }}
+    kin_m0_free_bytes: "{{ kin_m0_df.stdout_lines[-1] | trim | int }}"
+
+- name: Require enough free space for a recoverable archive
+  ansible.builtin.assert:
+    that:
+      - kin_m0_free_bytes | int >= (kin_m0_source_bytes | int + kin_m0_minimum_free_bytes | int)
+    fail_msg: >-
+      M0 requires at least the uncompressed legacy size plus
+      {{ kin_m0_minimum_free_bytes }} free bytes at {{ kin_m0_root }}.
+    quiet: true
+
+- name: Write the exact relative capture path list
+  ansible.builtin.copy:
+    dest: "{{ kin_m0_paths_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      {% for path in kin_m0_found_paths %}
+      {{ path | regex_replace('^/', '') }}
+      {% endfor %}
+
+- name: Record the pre-archive capture manifest
+  ansible.builtin.copy:
+    dest: "{{ kin_m0_capture_manifest }}"
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      {{ {
+        'schema': 'kin-m0-capture-manifest/v1',
+        'node_id': kin_node_id,
+        'source_commit': kin_source_commit,
+        'captured_at': ansible_facts['date_time']['iso8601'],
+        'captured_paths': kin_m0_found_paths,
+        'source_bytes': kin_m0_source_bytes | int,
+        'services_before_cutover': kin_m0_pre_cutover_service_report,
+        'services_at_capture': kin_m0_service_report,
+        'manual_review_paths': kin_m0_found_review_paths
+      } | to_nice_json }}
+
+- name: Hash the capture manifest and exact path list
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/sha256sum
+      - --
+      - "{{ kin_m0_capture_manifest }}"
+      - "{{ kin_m0_paths_file }}"
+  register: kin_m0_metadata_hash_command
+  changed_when: false
+
+- name: Remove an incomplete temporary archive from an earlier failed run
+  ansible.builtin.file:
+    path: "{{ kin_m0_archive }}.partial"
+    state: absent
+
+- name: Create the private legacy root filesystem archive
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/tar
+      - --create
+      - --gzip
+      - --acls
+      - --xattrs
+      - --numeric-owner
+      - --sparse
+      - --directory=/
+      - --verbatim-files-from
+      - "--files-from={{ kin_m0_paths_file }}"
+      - "--file={{ kin_m0_archive }}.partial"
+  register: kin_m0_tar
+  changed_when: true
+
+- name: Make the temporary archive root-only
+  ansible.builtin.file:
+    path: "{{ kin_m0_archive }}.partial"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Publish the complete archive atomically
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/mv
+      - --
+      - "{{ kin_m0_archive }}.partial"
+      - "{{ kin_m0_archive }}"
+  changed_when: true
+
+- name: Hash the captured archive
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/sha256sum
+      - --
+      - "{{ kin_m0_archive }}"
+  register: kin_m0_archive_hash_command
+  changed_when: false
+
+- name: Record the immutable capture receipt
+  ansible.builtin.copy:
+    dest: "{{ kin_m0_capture_receipt }}"
+    owner: root
+    group: root
+    mode: "0600"
+    force: false
+    content: |
+      {{ {
+        'schema': 'kin-m0-capture-receipt/v1',
+        'node_id': kin_node_id,
+        'source_commit': kin_source_commit,
+        'captured_at': ansible_facts['date_time']['iso8601'],
+        'captured_paths': kin_m0_found_paths,
+        'archive': kin_m0_archive,
+        'archive_sha256': kin_m0_archive_hash_command.stdout.split()[0],
+        'manifest': kin_m0_capture_manifest,
+        'manifest_sha256': kin_m0_metadata_hash_command.stdout_lines[0].split()[0],
+        'paths_file': kin_m0_paths_file,
+        'paths_sha256': kin_m0_metadata_hash_command.stdout_lines[1].split()[0],
+        'source_bytes': kin_m0_source_bytes | int
+      } | to_nice_json }}

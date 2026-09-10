@@ -6,6 +6,28 @@ kin_config_dir: /etc/kin-net
 kin_state_dir: /var/lib/kin-net
 kin_state_file: /var/lib/kin-net/config-level.json
 kin_status_command: /usr/local/bin/kin-node-status
+kin_receipts_dir: /var/lib/kin-net/receipts
+kin_h0_receipt_file: "{{ kin_receipts_dir }}/{{ kin_source_commit }}-H0.json"
+
+kin_m0_root: /var/lib/kin-net/migration
+kin_m0_archive: /var/lib/kin-net/migration/legacy-rootfs.tar.gz
+kin_m0_capture_manifest: /var/lib/kin-net/migration/capture-manifest.json
+kin_m0_capture_receipt: /var/lib/kin-net/migration/capture-receipt.json
+kin_m0_cutover_receipt: /var/lib/kin-net/migration/cutover-receipt.json
+kin_m0_paths_file: /var/lib/kin-net/migration/captured-paths.txt
+kin_m0_additional_paths: []
+kin_m0_manage_services: true
+kin_m0_minimum_free_bytes: 268435456
+kin_m0_storage_probe: /var/lib
+kin_m0_services:
+  - kin-node.service
+  - kin-bus.service
+  - kin-worker.service
+  - kin-tunnel.service
+kin_m0_review_paths:
+  - /etc/systemd/system/openbao.service
+  - /usr/lib/systemd/system/openbao.service
+  - /lib/systemd/system/openbao.service
 
 kin_h0_manage_packages: true
 kin_h0_packages:
@@ -17,11 +39,18 @@ kin_h0_packages:
 kin_legacy_paths:
   - /etc/kin-node
   - /opt/kin-node
+  - /var/lib/kin-node
   - /etc/kin-tunnel
+  - /opt/kin-tunnel
   - /var/lib/kin-tunnel-client
+  - /etc/systemd/resolved.conf.d/kin-node.conf
+  - /usr/local/bin/kinctl
+  - /usr/local/bin/kin-ops
+  - /usr/local/bin/kin-chat
+  - /usr/local/bin/kin-transport
+  - /usr/local/libexec/install-kin-tunnel-client
+  - /usr/local/libexec/migrate-kin-tunnel-env
+  - /etc/systemd/system/kin-node.service
   - /etc/systemd/system/kin-bus.service
   - /etc/systemd/system/kin-worker.service
   - /etc/systemd/system/kin-tunnel.service
-  - /etc/systemd/system/openbao.service
-  - /usr/lib/systemd/system/openbao.service
-  - /lib/systemd/system/openbao.service

@@ -2,13 +2,8 @@
 kin_source_commit: ""
 kin_node_id: "{{ ansible_machine_id | default('') }}"
 kin_target_distribution: "{{ ansible_facts['distribution'] | default('') }}"
-kin_config_dir: /etc/kin-net
 kin_state_dir: /var/lib/kin-net
 kin_state_file: /var/lib/kin-net/config-level.json
-kin_status_command: /usr/local/bin/kin-node-status
-kin_receipts_dir: /var/lib/kin-net/receipts
-kin_h0_receipt_file: "{{ kin_receipts_dir }}/{{ kin_source_commit }}-H0.json"
-kin_h1_receipt_file: "{{ kin_receipts_dir }}/{{ kin_source_commit }}-H1.json"
 
 kin_m0_root: /var/lib/kin-net/migration
 kin_m0_archive: /var/lib/kin-net/migration/legacy-rootfs.tar.gz
@@ -30,13 +25,6 @@ kin_m0_review_paths:
   - /etc/systemd/system/openbao.service
   - /usr/lib/systemd/system/openbao.service
   - /lib/systemd/system/openbao.service
-
-kin_h0_manage_packages: true
-kin_h0_packages:
-  - ca-certificates
-  - git
-  - python3
-  - python3-venv
 
 kin_legacy_paths:
   - /etc/kin-node

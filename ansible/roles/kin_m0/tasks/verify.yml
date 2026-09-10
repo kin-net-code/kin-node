@@ -1,0 +1,144 @@
+---
+- name: Refresh the M0 evidence state
+  ansible.builtin.include_tasks: discover.yml
+
+- name: Set whether migration evidence is required
+  ansible.builtin.set_fact:
+    kin_m0_evidence_required: >-
+      {{ (kin_m0_found_paths | length > 0) or kin_m0_cutover_receipt_exists }}
+
+- name: Accept a host with no native legacy state
+  ansible.builtin.debug:
+    msg: "PASS M0 CLEAN node={{ kin_node_id }}"
+  when: not kin_m0_evidence_required
+
+- name: Verify required migration evidence
+  when: kin_m0_evidence_required
+  block:
+    - name: Require the complete M0 evidence set
+      ansible.builtin.assert:
+        that:
+          - kin_m0_archive_exists
+          - kin_m0_capture_receipt_exists
+          - kin_m0_cutover_receipt_exists
+        fail_msg: Legacy Kin state exists without a complete M0 archive and cutover receipt.
+        quiet: true
+
+    - name: Inspect M0 evidence permissions
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop:
+        - "{{ kin_m0_root }}"
+        - "{{ kin_m0_archive }}"
+        - "{{ kin_m0_capture_manifest }}"
+        - "{{ kin_m0_capture_receipt }}"
+        - "{{ kin_m0_cutover_receipt }}"
+        - "{{ kin_m0_paths_file }}"
+      register: kin_m0_evidence_stats
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Require a private root-owned migration directory
+      ansible.builtin.assert:
+        that:
+          - kin_m0_evidence_stats.results[0].stat.exists
+          - kin_m0_evidence_stats.results[0].stat.isdir
+          - kin_m0_evidence_stats.results[0].stat.pw_name == 'root'
+          - kin_m0_evidence_stats.results[0].stat.gr_name == 'root'
+          - kin_m0_evidence_stats.results[0].stat.mode == '0700'
+        fail_msg: M0 migration directory is absent or not root-only.
+        quiet: true
+
+    - name: Require private root-owned evidence files
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'root'
+          - item.stat.mode == '0600'
+        fail_msg: "M0 evidence file is absent or not root-only: {{ item.item }}"
+        quiet: true
+      loop: "{{ kin_m0_evidence_stats.results[1:] }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Read the M0 receipts
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      loop:
+        - "{{ kin_m0_capture_receipt }}"
+        - "{{ kin_m0_cutover_receipt }}"
+      register: kin_m0_receipt_raw
+      no_log: true
+
+    - name: Decode the M0 receipts
+      ansible.builtin.set_fact:
+        kin_m0_capture_state: "{{ kin_m0_receipt_raw.results[0].content | b64decode | from_json }}"
+        kin_m0_cutover_state: "{{ kin_m0_receipt_raw.results[1].content | b64decode | from_json }}"
+      no_log: true
+
+    - name: Validate the M0 receipt chain
+      ansible.builtin.assert:
+        that:
+          - kin_m0_capture_state.schema == 'kin-m0-capture-receipt/v1'
+          - kin_m0_capture_state.node_id == kin_node_id
+          - kin_m0_capture_state.source_commit is match('^[0-9a-f]{40}$')
+          - kin_m0_capture_state.archive == kin_m0_archive
+          - kin_m0_capture_state.archive_sha256 is match('^[0-9a-f]{64}$')
+          - kin_m0_capture_state.manifest == kin_m0_capture_manifest
+          - kin_m0_capture_state.manifest_sha256 is match('^[0-9a-f]{64}$')
+          - kin_m0_capture_state.paths_file == kin_m0_paths_file
+          - kin_m0_capture_state.paths_sha256 is match('^[0-9a-f]{64}$')
+          - kin_m0_found_paths | difference(kin_m0_capture_state.captured_paths) | length == 0
+          - kin_m0_cutover_state.schema == 'kin-m0-cutover-receipt/v1'
+          - kin_m0_cutover_state.node_id == kin_node_id
+          - kin_m0_cutover_state.source_commit is match('^[0-9a-f]{40}$')
+          - kin_m0_cutover_state.capture_receipt == kin_m0_capture_receipt
+          - kin_m0_cutover_state.capture_receipt_sha256 is match('^[0-9a-f]{64}$')
+          - kin_m0_cutover_state.legacy_paths_left_in_place | bool
+          - not kin_m0_cutover_state.destructive_deletion_performed | bool
+        fail_msg: M0 receipts do not describe this machine, archive and cutover boundary.
+        quiet: true
+
+    - name: Recompute the M0 evidence hashes
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/sha256sum
+          - --
+          - "{{ kin_m0_archive }}"
+          - "{{ kin_m0_capture_manifest }}"
+          - "{{ kin_m0_paths_file }}"
+          - "{{ kin_m0_capture_receipt }}"
+      register: kin_m0_verified_hashes
+      changed_when: false
+
+    - name: Require the captured evidence bytes to be unchanged
+      ansible.builtin.assert:
+        that:
+          - kin_m0_verified_hashes.stdout_lines[0].split()[0] == kin_m0_capture_state.archive_sha256
+          - kin_m0_verified_hashes.stdout_lines[1].split()[0] == kin_m0_capture_state.manifest_sha256
+          - kin_m0_verified_hashes.stdout_lines[2].split()[0] == kin_m0_capture_state.paths_sha256
+          - kin_m0_verified_hashes.stdout_lines[3].split()[0] == kin_m0_cutover_state.capture_receipt_sha256
+        fail_msg: M0 evidence hash does not match its capture receipt.
+        quiet: true
+
+    - name: Require managed legacy services to remain inert
+      ansible.builtin.assert:
+        that:
+          - item.state != 'running'
+          - item.status in ['disabled', 'masked', 'static', 'absent']
+        fail_msg: "Legacy service crossed the M0 boundary: {{ item.name }}"
+        quiet: true
+      loop: "{{ kin_m0_service_report }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: kin_m0_manage_services | bool
+
+    - name: Report concise M0 acceptance
+      ansible.builtin.debug:
+        msg: >-
+          PASS M0 node={{ kin_node_id }}
+          archive_sha256={{ kin_m0_capture_state.archive_sha256 }}
+          legacy_paths={{ kin_m0_capture_state.captured_paths | length }}

@@ -1,5 +1,5 @@
 ---
-- name: Bring one clean Ubuntu node to Kin config level H1
+- name: Bring one supported Ubuntu node to Kin config level H1
   hosts: kin_node
   become: true
   gather_facts: true

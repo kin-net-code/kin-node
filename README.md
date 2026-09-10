@@ -1,8 +1,8 @@
 # Kin Node
 
 Kin Node is a native host-configuration project. Its current contract ends at
-configuration level H1: a clean Ubuntu host is proven to be under exact,
-versioned Kin configuration control.
+configuration level H1: an existing Ubuntu host is proven to be under exact,
+versioned Kin configuration control without reinstalling its base OS.
 
 Vagrant, VirtualBox, and a VM image are not part of that contract. Workload VMs
 will return later as an isolation boundary for inference-linked risk. They are
@@ -18,7 +18,8 @@ host.
 | Level | Adds | Acceptance boundary |
 | --- | --- | --- |
 | Development image | Disposable Ubuntu 26.04 environment with pinned Ansible | Roles converge in Docker or Podman; this is not a node |
-| H0 | Base packages, `/etc/kin-net`, `/var/lib/kin-net`, exact source and stable node identity | Clean supported platform; root ownership and modes; H1 remains absent |
+| M0 | Optional in-place retirement of a native legacy Kin runtime | Exact Kin services stopped/disabled; root-only archive and SHA-256 receipt; no deletion |
+| H0 | Base packages, `/etc/kin-net`, `/var/lib/kin-net`, exact source and stable node identity | Clean or accepted-M0 platform; root ownership and modes; H1 remains absent |
 | H1 | H1 state promotion and `/usr/local/bin/kin-node-status` | Matching accepted H0 is mandatory; status returns the accepted machine-readable record |
 
 H0 and H1 are separate Ansible roles. H1 cannot construct or silently repair a
@@ -28,6 +29,11 @@ playbook.
 H1 currently proves versioned configuration control; it is not yet a running
 Kin Net service. The first real host service belongs in the next level, with its
 own start-up and acceptance contract.
+
+M0 is deliberately conservative. It never reinstalls the OS, deletes legacy
+files, changes firewall or network policy, stops OpenBao, or manipulates an old
+VM. It reports ambiguous resources for review. A legacy VM and its user service
+must be halted separately before native cutover.
 
 ## Develop and test in a container
 
@@ -60,19 +66,40 @@ inference.
 supports one configuration boundary at a time:
 
 ```bash
+./bootstrap-controller
+sudo -v
+./kin-node inspect-m0
 ./kin-node check-h0
 ./kin-node apply-h0
 ./kin-node apply-h1
 ./kin-node status
 ```
 
-The host path currently requires Ubuntu, Git, pinned `ansible-core==2.20.9`, and
-passwordless sudo. That prerequisite is still bootstrap debt; it is explicit
-rather than hidden in a VM provisioner. Packaging and installing the native host
-service will replace it with a one-command host bootstrap.
+`bootstrap-controller` creates the ignored repository-local `.venv` and installs
+the pinned `ansible-core==2.20.9` toolchain. The host path requires Ubuntu, Git,
+Python 3.12 or newer with `venv`, and current sudo authorization (`sudo -v` before the
+controller). That prerequisite remains explicit bootstrap debt.
 
 The controller refuses dirty source and records the exact Git commit and stable
-node ID in `/var/lib/kin-net/config-level.json`.
+node ID in `/var/lib/kin-net/config-level.json`. Per-source H0/H1 receipts remain
+under `/var/lib/kin-net/receipts`. Applying a newer source to an installed H1
+returns the honest current boundary to H0; applying H1 then restores it.
+This `node_id` is the stable machine/deployment identifier, not the future
+cryptographic `kin:id` principal.
+
+If inspection finds native legacy state, do not apply H0 directly. Review the
+inventory first, then use the explicit cutover gate:
+
+```bash
+./kin-node cutover-m0 --approve-stop-legacy
+./kin-node apply-h0
+./kin-node apply-h1
+```
+
+The archive at `/var/lib/kin-net/migration/legacy-rootfs.tar.gz` can contain keys,
+databases and payloads. It is mode `0600`; never paste or upload it. See
+[the Homenet in-place runbook](docs/operations/HOMENET-IN-PLACE.md) before using
+the cutover action.
 
 ## Fast checks without a container
 

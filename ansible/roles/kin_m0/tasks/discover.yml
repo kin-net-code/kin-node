@@ -1,0 +1,204 @@
+---
+- name: Validate the M0 host and source identity
+  ansible.builtin.assert:
+    that:
+      - kin_target_distribution == 'Ubuntu'
+      - kin_node_id is match('^[0-9a-f]{32}$')
+      - ansible_version.full == '2.20.9'
+      - kin_source_commit is match('^[0-9a-f]{40}$')
+      - kin_legacy_paths | type_debug == 'list'
+      - kin_m0_additional_paths | type_debug == 'list'
+      - kin_m0_services | type_debug == 'list'
+      - kin_m0_review_paths | type_debug == 'list'
+      - kin_state_dir is match('^/[^\n]+$')
+      - kin_m0_root is match('^/[^\n]+$')
+      - "'/../' not in kin_m0_root"
+      - not kin_m0_root.endswith('/..')
+    fail_msg: M0 requires Ubuntu, Ansible 2.20.9 and an exact Git checkout.
+    quiet: true
+
+- name: Build the exact M0 inspection path set
+  ansible.builtin.set_fact:
+    kin_m0_requested_paths: "{{ (kin_legacy_paths + kin_m0_additional_paths) | unique | list }}"
+
+- name: Require every M0 evidence file to stay inside its private root
+  ansible.builtin.assert:
+    that:
+      - kin_m0_root.startswith(kin_state_dir + '/')
+      - item.startswith(kin_m0_root + '/')
+      - "'/../' not in item"
+      - not item.endswith('/..')
+    fail_msg: "M0 evidence path escapes its private root: {{ item }}"
+    quiet: true
+  loop:
+    - "{{ kin_m0_archive }}"
+    - "{{ kin_m0_capture_manifest }}"
+    - "{{ kin_m0_capture_receipt }}"
+    - "{{ kin_m0_cutover_receipt }}"
+    - "{{ kin_m0_paths_file }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Reject broad or unsafe legacy inspection paths
+  ansible.builtin.assert:
+    that:
+      - item is string
+      - item is match('^/[^\n]+$')
+      - item is not match('^//')
+      - not item.endswith('/')
+      - "'/../' not in item"
+      - not item.endswith('/..')
+      - "'/./' not in item"
+      - not item.endswith('/.')
+      - "'//' not in item"
+      - item not in ['/', '/bin', '/boot', '/dev', '/etc', '/home', '/lib', '/lib64', '/opt', '/proc', '/root', '/run', '/sbin', '/srv', '/sys', '/tmp', '/usr', '/usr/local', '/var', '/var/lib']
+      - item != kin_state_dir
+      - not item.startswith(kin_state_dir + '/')
+    fail_msg: "M0 refuses unsafe legacy path: {{ item }}"
+    quiet: true
+  loop: "{{ kin_m0_requested_paths }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Reject broad or unsafe additional capture paths
+  ansible.builtin.assert:
+    that:
+      - item is string
+      - item is match('^/[^\n]+$')
+      - item is not match('^//')
+      - item is match('^/(home/[^/]+|root|srv|opt|var/lib)/[^/]*kin[^/]*(/[^/]+)*$')
+      - not item.endswith('/')
+      - "'/../' not in item"
+      - not item.endswith('/..')
+      - "'/./' not in item"
+      - not item.endswith('/.')
+      - "'//' not in item"
+      - item not in ['/', '/bin', '/boot', '/dev', '/etc', '/home', '/lib', '/lib64', '/opt', '/proc', '/root', '/run', '/sbin', '/srv', '/sys', '/tmp', '/usr', '/usr/local', '/var', '/var/lib']
+      - item != kin_state_dir
+      - not item.startswith(kin_state_dir + '/')
+    fail_msg: "M0 refuses unsafe capture path: {{ item }}"
+    quiet: true
+  loop: "{{ kin_m0_additional_paths }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Restrict automatic cutover to explicitly Kin-named services
+  ansible.builtin.assert:
+    that:
+      - item is match('^kin-[a-z0-9-]+\.service$')
+    fail_msg: "M0 refuses non-Kin service name: {{ item }}"
+    quiet: true
+  loop: "{{ kin_m0_services }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Inspect exact legacy Kin paths
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop: "{{ kin_m0_requested_paths }}"
+  register: kin_m0_legacy_stats
+  loop_control:
+    label: "{{ item }}"
+
+- name: Initialize discovered legacy paths
+  ansible.builtin.set_fact:
+    kin_m0_found_paths: []
+
+- name: Record discovered legacy paths
+  ansible.builtin.set_fact:
+    kin_m0_found_paths: "{{ kin_m0_found_paths + [item.item] }}"
+  when: item.stat.exists or (item.stat.islnk | default(false))
+  loop: "{{ kin_m0_legacy_stats.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Inspect resources that require operator attribution
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop: "{{ kin_m0_review_paths }}"
+  register: kin_m0_review_stats
+  loop_control:
+    label: "{{ item }}"
+
+- name: Initialize manual-review paths
+  ansible.builtin.set_fact:
+    kin_m0_found_review_paths: []
+
+- name: Record resources that require operator attribution
+  ansible.builtin.set_fact:
+    kin_m0_found_review_paths: "{{ kin_m0_found_review_paths + [item.item] }}"
+  when: item.stat.exists or (item.stat.islnk | default(false))
+  loop: "{{ kin_m0_review_stats.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Gather service state without changing it
+  ansible.builtin.service_facts:
+  when: kin_m0_manage_services | bool
+
+- name: Initialize the managed service report
+  ansible.builtin.set_fact:
+    kin_m0_service_report: []
+
+- name: Build the managed service report
+  ansible.builtin.set_fact:
+    kin_m0_service_report: >-
+      {{ kin_m0_service_report | default([]) + [{
+        'name': item,
+        'state': ((ansible_facts.services[item].state | default('unknown'))
+          if item in (ansible_facts.services | default({})) else 'absent'),
+        'status': ((ansible_facts.services[item].status | default('unknown'))
+          if item in (ansible_facts.services | default({})) else 'absent')
+      }] }}
+  loop: "{{ kin_m0_services }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Inspect existing Kin and migration records
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop:
+    - "{{ kin_state_file }}"
+    - "{{ kin_m0_archive }}"
+    - "{{ kin_m0_capture_receipt }}"
+    - "{{ kin_m0_cutover_receipt }}"
+  register: kin_m0_record_stats
+  loop_control:
+    label: "{{ item }}"
+
+- name: Inspect M0 container paths
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop:
+    - "{{ kin_state_dir }}"
+    - "{{ kin_m0_root }}"
+  register: kin_m0_container_stats
+  loop_control:
+    label: "{{ item }}"
+
+- name: Select the destination filesystem probe
+  ansible.builtin.set_fact:
+    kin_m0_effective_storage_probe: >-
+      {{ kin_state_dir
+         if (kin_m0_container_stats.results[0].stat.exists and
+             kin_m0_container_stats.results[0].stat.isdir)
+         else kin_m0_storage_probe }}
+
+- name: Name the existing record states
+  ansible.builtin.set_fact:
+    kin_m0_config_state_exists: >-
+      {{ kin_m0_record_stats.results[0].stat.exists or
+         (kin_m0_record_stats.results[0].stat.islnk | default(false)) }}
+    kin_m0_archive_exists: >-
+      {{ kin_m0_record_stats.results[1].stat.exists or
+         (kin_m0_record_stats.results[1].stat.islnk | default(false)) }}
+    kin_m0_capture_receipt_exists: >-
+      {{ kin_m0_record_stats.results[2].stat.exists or
+         (kin_m0_record_stats.results[2].stat.islnk | default(false)) }}
+    kin_m0_cutover_receipt_exists: >-
+      {{ kin_m0_record_stats.results[3].stat.exists or
+         (kin_m0_record_stats.results[3].stat.islnk | default(false)) }}

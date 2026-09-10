@@ -1,0 +1,10 @@
+---
+- name: Require an explicit M0 action
+  ansible.builtin.assert:
+    that:
+      - kin_m0_action in ['inspect', 'cutover', 'verify']
+    fail_msg: M0 requires one of inspect, cutover or verify.
+    quiet: true
+
+- name: Run the requested M0 action
+  ansible.builtin.include_tasks: "{{ kin_m0_action }}.yml"

@@ -16,6 +16,11 @@
         fail_msg: H0 acceptance requires the supported platform, runtime and exact source commit.
         quiet: true
 
+    - name: Re-verify a clean host or accepted M0 migration evidence
+      ansible.builtin.include_role:
+        name: kin_m0
+        tasks_from: verify
+
     - name: Gather installed package facts
       ansible.builtin.package_facts:
         manager: auto
@@ -36,6 +41,7 @@
       loop:
         - "{{ kin_config_dir }}"
         - "{{ kin_state_dir }}"
+        - "{{ kin_receipts_dir }}"
       register: kin_h0_directory_stats
 
     - name: Require the H0 directories and permissions
@@ -57,6 +63,11 @@
         path: "{{ kin_state_file }}"
       register: kin_h0_state_file_stat
 
+    - name: Inspect the exact-source H0 receipt
+      ansible.builtin.stat:
+        path: "{{ kin_h0_receipt_file }}"
+      register: kin_h0_receipt_file_stat
+
     - name: Require a root-owned config-level record
       ansible.builtin.assert:
         that:
@@ -65,6 +76,11 @@
           - kin_h0_state_file_stat.stat.pw_name == 'root'
           - kin_h0_state_file_stat.stat.gr_name == 'root'
           - kin_h0_state_file_stat.stat.mode == '0644'
+          - kin_h0_receipt_file_stat.stat.exists
+          - kin_h0_receipt_file_stat.stat.isreg
+          - kin_h0_receipt_file_stat.stat.pw_name == 'root'
+          - kin_h0_receipt_file_stat.stat.gr_name == 'root'
+          - kin_h0_receipt_file_stat.stat.mode == '0644'
         fail_msg: H0 config-level record or permissions are wrong.
         quiet: true
 
@@ -73,9 +89,15 @@
         src: "{{ kin_state_file }}"
       register: kin_h0_state_raw
 
+    - name: Read the exact-source H0 receipt
+      ansible.builtin.slurp:
+        src: "{{ kin_h0_receipt_file }}"
+      register: kin_h0_receipt_raw
+
     - name: Decode the config-level record
       ansible.builtin.set_fact:
         kin_h0_accepted_state: "{{ kin_h0_state_raw.content | b64decode | from_json }}"
+        kin_h0_accepted_receipt: "{{ kin_h0_receipt_raw.content | b64decode | from_json }}"
 
     - name: Require the installed H0 contract
       ansible.builtin.assert:
@@ -84,6 +106,10 @@
           - kin_h0_accepted_state.config_level in ['H0', 'H1']
           - kin_h0_accepted_state.source_commit == kin_source_commit
           - kin_h0_accepted_state.node_id == kin_node_id
+          - kin_h0_accepted_receipt.schema == 'kin-config-level-receipt/v1'
+          - kin_h0_accepted_receipt.config_level == 'H0'
+          - kin_h0_accepted_receipt.source_commit == kin_source_commit
+          - kin_h0_accepted_receipt.node_id == kin_node_id
         fail_msg: Installed state does not satisfy this checkout's H0 contract.
         quiet: true
 

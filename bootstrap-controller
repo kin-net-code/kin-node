@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+fail() {
+  printf 'FAIL  %s\n' "$*" >&2
+  exit 1
+}
+
+tool_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+venv="$tool_root/.venv"
+
+command -v git >/dev/null 2>&1 || fail "git is required"
+command -v python3 >/dev/null 2>&1 || fail "python3 is required"
+
+python3 - <<'PY' || fail "ansible-core 2.20.9 requires Python 3.12 or newer"
+import sys
+raise SystemExit(0 if sys.version_info >= (3, 12) else 1)
+PY
+
+python3 -m venv "$venv" || \
+  fail "python3-venv is required (Ubuntu: sudo apt-get install python3-venv)"
+
+"$venv/bin/pip" install \
+  --disable-pip-version-check \
+  --requirement "$tool_root/requirements-test.txt"
+
+installed_version=$("$venv/bin/ansible-playbook" --version | sed -n '1s/^ansible-playbook \[core \([^]]*\)\].*/\1/p')
+[[ "$installed_version" == 2.20.9 ]] || \
+  fail "expected ansible-core 2.20.9, found ${installed_version:-unknown}"
+
+printf 'PASS  KIN_CONTROLLER ansible-core=%s path=%s\n' "$installed_version" "$venv"

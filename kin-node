@@ -8,8 +8,11 @@ fail() {
 
 usage() {
   cat <<'EOF'
-Usage: kin-node ACTION
+Usage: kin-node ACTION [OPTIONS]
 
+  inspect-m0 Read-only inventory of legacy native Kin state and services.
+  cutover-m0 Stop exact legacy Kin services, archive state, and write M0 receipts.
+  accept-m0  Re-run the read-only M0 acceptance playbook.
   check-h0   Show what the H0 playbook would change.
   apply-h0   Apply H0, then immediately test the H0 contract.
   accept-h0  Re-run the read-only H0 acceptance playbook.
@@ -17,6 +20,14 @@ Usage: kin-node ACTION
   apply-h1   Require H0, apply H1, then immediately test H1.
   accept-h1  Re-run the read-only H1 acceptance playbook.
   status     Print the installed machine-readable H1 record.
+
+Options for inspect-m0 and cutover-m0:
+  --legacy-root ABSOLUTE_PATH
+              Include one additional exact path in inspection/archive; repeatable.
+
+Required by cutover-m0:
+  --approve-stop-legacy
+              Confirm stopping and disabling only the named legacy Kin services.
 EOF
 }
 
@@ -26,11 +37,44 @@ inventory="$ansible_root/inventory.ini"
 config="$ansible_root/ansible.cfg"
 
 action=${1:-}
+shift || true
 case "$action" in
-  check-h0|apply-h0|accept-h0|check-h1|apply-h1|accept-h1|status) ;;
+  inspect-m0|cutover-m0|accept-m0|check-h0|apply-h0|accept-h0|check-h1|apply-h1|accept-h1|status) ;;
   -h|--help|help|'') usage; exit 0 ;;
   *) usage >&2; fail "unknown action: $action" ;;
 esac
+
+legacy_roots=()
+cutover_approved=false
+while (($#)); do
+  case "$1" in
+    --legacy-root)
+      (($# >= 2)) || fail "--legacy-root requires an absolute path"
+      [[ "$2" = /* ]] || fail "--legacy-root must be absolute: $2"
+      legacy_roots+=("$2")
+      shift 2
+      ;;
+    --approve-stop-legacy)
+      cutover_approved=true
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *) fail "unknown option: $1" ;;
+  esac
+done
+
+if [[ "$action" != inspect-m0 && "$action" != cutover-m0 && ${#legacy_roots[@]} -gt 0 ]]; then
+  fail "--legacy-root is valid only for inspect-m0 and cutover-m0"
+fi
+if [[ "$action" != cutover-m0 && "$cutover_approved" == true ]]; then
+  fail "--approve-stop-legacy is valid only for cutover-m0"
+fi
+if [[ "$action" == cutover-m0 && "$cutover_approved" != true ]]; then
+  fail "cutover-m0 requires --approve-stop-legacy"
+fi
 
 if [[ "$action" == status ]]; then
   [[ -x /usr/local/bin/kin-node-status ]] || fail "H1 status is not installed"
@@ -38,7 +82,14 @@ if [[ "$action" == status ]]; then
 fi
 
 command -v git >/dev/null 2>&1 || fail "git is required"
-ansible_playbook=${KIN_ANSIBLE_PLAYBOOK:-$(command -v ansible-playbook || true)}
+command -v python3 >/dev/null 2>&1 || fail "python3 is required"
+ansible_playbook=${KIN_ANSIBLE_PLAYBOOK:-}
+if [[ -z "$ansible_playbook" && -x "$tool_root/.venv/bin/ansible-playbook" ]]; then
+  ansible_playbook="$tool_root/.venv/bin/ansible-playbook"
+fi
+if [[ -z "$ansible_playbook" ]]; then
+  ansible_playbook=$(command -v ansible-playbook || true)
+fi
 [[ -n "$ansible_playbook" ]] || fail "ansible-playbook is required"
 [[ "$ansible_playbook" = /* ]] || fail "ansible-playbook must resolve to an absolute path"
 
@@ -53,7 +104,27 @@ git -C "$repo_root" diff --cached --quiet || fail "checkout has staged changes"
 source_commit=$(git -C "$repo_root" rev-parse --verify HEAD)
 [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]] || fail "cannot resolve an exact source commit"
 
-extra_vars="{\"kin_source_commit\":\"$source_commit\"}"
+for legacy_root in "${legacy_roots[@]}"; do
+  resolved_legacy_root=$(readlink -m -- "$legacy_root")
+  case "$repo_root/" in
+    "$resolved_legacy_root/"*)
+      fail "a legacy capture root cannot contain the active Kin checkout"
+      ;;
+  esac
+done
+
+extra_vars=$(python3 - "$source_commit" "$cutover_approved" "${legacy_roots[@]}" <<'PY'
+import json
+import sys
+
+commit, approved, *roots = sys.argv[1:]
+print(json.dumps({
+    "kin_source_commit": commit,
+    "kin_m0_cutover_approved": approved == "true",
+    "kin_m0_additional_paths": list(dict.fromkeys(roots)),
+}, separators=(",", ":")))
+PY
+)
 ansible=(
   "$ansible_playbook"
   --inventory "$inventory"
@@ -71,9 +142,57 @@ syntax_check() {
     --syntax-check "$1"
 }
 
-sudo -n true 2>/dev/null || fail "passwordless sudo is required"
+sudo -n true 2>/dev/null || \
+  fail "non-interactive sudo authorization is required; run sudo -v first"
+
+legacy_host_root=${KIN_LEGACY_HOST_ROOT:-"${HOME}/kin-node"}
+if [[ "$action" == inspect-m0 ]]; then
+  if [[ -x "$legacy_host_root/kin-host" ]]; then
+    printf 'NOTICE LEGACY_HOST_ROOT path=%s state=present modified=false\n' "$legacy_host_root"
+  fi
+  if command -v VBoxManage >/dev/null 2>&1 && \
+     VBoxManage list runningvms 2>/dev/null | grep -Fq '"kin-node-ng0"'; then
+    printf 'NOTICE LEGACY_VM name=kin-node-ng0 state=running modified=false\n'
+  fi
+  if command -v systemctl >/dev/null 2>&1; then
+    legacy_user_unit_active=$(systemctl --user is-active kin-node-host.service 2>/dev/null || true)
+    legacy_user_unit_enabled=$(systemctl --user is-enabled kin-node-host.service 2>/dev/null || true)
+    printf 'NOTICE LEGACY_USER_SUPERVISOR active=%s enabled=%s modified=false\n' \
+      "${legacy_user_unit_active:-unknown}" "${legacy_user_unit_enabled:-unknown}"
+  fi
+fi
+
+if [[ "$action" == cutover-m0 ]]; then
+  if command -v VBoxManage >/dev/null 2>&1 && \
+     VBoxManage list runningvms 2>/dev/null | grep -Fq '"kin-node-ng0"'; then
+    fail "legacy VM kin-node-ng0 is running; halt it with the old kin-host before cutover"
+  fi
+
+  if command -v systemctl >/dev/null 2>&1; then
+    legacy_user_unit_active=$(systemctl --user is-active kin-node-host.service 2>/dev/null || true)
+    legacy_user_unit_enabled=$(systemctl --user is-enabled kin-node-host.service 2>/dev/null || true)
+    if [[ "$legacy_user_unit_active" == active || "$legacy_user_unit_enabled" == enabled ]]; then
+      fail "legacy user supervisor is active/enabled; run: systemctl --user disable --now kin-node-host.service"
+    fi
+  fi
+fi
 
 case "$action" in
+  inspect-m0)
+    syntax_check "$ansible_root/playbooks/m0-inspect.yml"
+    run_as_root "$ansible_root/playbooks/m0-inspect.yml"
+    printf 'PASS  M0_INSPECTION source=%s\n' "$source_commit"
+    ;;
+  cutover-m0)
+    syntax_check "$ansible_root/playbooks/m0-cutover.yml"
+    run_as_root "$ansible_root/playbooks/m0-cutover.yml"
+    run_as_root "$ansible_root/playbooks/m0-acceptance.yml"
+    printf 'PASS  M0_CUTOVER source=%s\n' "$source_commit"
+    ;;
+  accept-m0)
+    run_as_root "$ansible_root/playbooks/m0-acceptance.yml"
+    printf 'PASS  M0_ACCEPTANCE source=%s\n' "$source_commit"
+    ;;
   check-h0)
     syntax_check "$ansible_root/playbooks/h0.yml"
     run_as_root --check --diff "$ansible_root/playbooks/h0.yml"

@@ -1,0 +1,124 @@
+---
+- name: Discover the in-place migration state
+  ansible.builtin.include_tasks: discover.yml
+
+- name: Initialize the installed configuration report
+  ansible.builtin.set_fact:
+    kin_m0_installed_config_report:
+      state: absent
+
+- name: Classify a non-regular installed configuration record
+  ansible.builtin.set_fact:
+    kin_m0_installed_config_report:
+      state: invalid-file-type
+  when:
+    - kin_m0_config_state_exists
+    - not (kin_m0_record_stats.results[0].stat.isreg | default(false))
+
+- name: Parse a regular installed configuration record safely
+  when:
+    - kin_m0_config_state_exists
+    - kin_m0_record_stats.results[0].stat.isreg | default(false)
+  block:
+    - name: Read installed configuration metadata
+      ansible.builtin.slurp:
+        src: "{{ kin_state_file }}"
+      register: kin_m0_installed_config_raw
+      no_log: true
+
+    - name: Decode installed configuration metadata
+      ansible.builtin.set_fact:
+        kin_m0_installed_config: >-
+          {{ kin_m0_installed_config_raw.content | b64decode | from_json }}
+      no_log: true
+
+    - name: Select non-secret installed configuration fields
+      ansible.builtin.set_fact:
+        kin_m0_installed_config_report:
+          state: parsed
+          schema: "{{ kin_m0_installed_config.schema | default('missing') }}"
+          config_level: "{{ kin_m0_installed_config.config_level | default('missing') }}"
+          node_id: "{{ kin_m0_installed_config.node_id | default('missing') }}"
+          source_commit: "{{ kin_m0_installed_config.source_commit | default('missing') }}"
+  rescue:
+    - name: Report invalid installed configuration metadata
+      ansible.builtin.set_fact:
+        kin_m0_installed_config_report:
+          state: invalid-json
+
+- name: Measure discovered legacy state for planning
+  ansible.builtin.command:
+    argv: "{{ ['/usr/bin/du', '--summarize', '--bytes', '--'] + kin_m0_found_paths }}"
+  register: kin_m0_inspection_du
+  changed_when: false
+  when: kin_m0_found_paths | length > 0
+
+- name: Read migration destination capacity for planning
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/df
+      - --output=avail
+      - --block-size=1
+      - "{{ kin_m0_effective_storage_probe }}"
+  register: kin_m0_inspection_df
+  changed_when: false
+
+- name: Calculate payload-free capacity facts
+  ansible.builtin.set_fact:
+    kin_m0_inspection_source_bytes: >-
+      {{ (kin_m0_inspection_du.stdout_lines
+          | map('regex_replace', '^([0-9]+).*$', '\1')
+          | map('int')
+          | sum)
+         if kin_m0_found_paths | length > 0 else 0 }}
+    kin_m0_inspection_free_bytes: "{{ kin_m0_inspection_df.stdout_lines[-1] | trim | int }}"
+    kin_m0_state_container_safe: >-
+      {{ not (kin_m0_container_stats.results[0].stat.islnk | default(false)) and
+         (not kin_m0_container_stats.results[0].stat.exists or
+          kin_m0_container_stats.results[0].stat.isdir) }}
+    kin_m0_root_container_safe: >-
+      {{ not (kin_m0_container_stats.results[1].stat.islnk | default(false)) and
+         (not kin_m0_container_stats.results[1].stat.exists or
+          kin_m0_container_stats.results[1].stat.isdir) }}
+
+- name: Report the payload-free M0 inspection
+  ansible.builtin.debug:
+    msg: >-
+      {{ {
+        'schema': 'kin-m0-inspection/v1',
+        'node_id': kin_node_id,
+        'platform': ansible_facts['distribution'] ~ ' ' ~ ansible_facts['distribution_version'],
+        'controller_source_commit': kin_source_commit,
+        'legacy_paths': kin_m0_found_paths,
+        'legacy_bytes': kin_m0_inspection_source_bytes | int,
+        'migration_free_bytes': kin_m0_inspection_free_bytes | int,
+        'capture_space_gate': ((kin_m0_inspection_free_bytes | int) >=
+          ((kin_m0_inspection_source_bytes | int) + (kin_m0_minimum_free_bytes | int))),
+        'managed_services': kin_m0_service_report,
+        'manual_review_paths': kin_m0_found_review_paths,
+        'existing_config': kin_m0_installed_config_report,
+        'state_container_safe': kin_m0_state_container_safe,
+        'migration_container_safe': kin_m0_root_container_safe,
+        'archive_present': kin_m0_archive_exists,
+        'capture_receipt_present': kin_m0_capture_receipt_exists,
+        'cutover_receipt_present': kin_m0_cutover_receipt_exists
+      } | to_json }}
+
+- name: State the next safe boundary
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'BLOCKED: unsafe state container, invalid config metadata, or partial M0 evidence requires review.'
+         if (not kin_m0_state_container_safe or
+             not kin_m0_root_container_safe or
+             kin_m0_installed_config_report.state in ['invalid-file-type', 'invalid-json'] or
+             ((kin_m0_archive_exists or kin_m0_capture_receipt_exists) and
+              not kin_m0_cutover_receipt_exists))
+         else ('EVIDENCE: run accept-m0 before checking H0.'
+               if kin_m0_cutover_receipt_exists
+               else ('CLEAN: M0 is unnecessary; H0 may be checked.'
+                     if kin_m0_found_paths | length == 0
+                     else ('BLOCKED: legacy capture lacks the required free space.'
+                           if not ((kin_m0_inspection_free_bytes | int) >=
+                                   ((kin_m0_inspection_source_bytes | int) +
+                                    (kin_m0_minimum_free_bytes | int)))
+                           else 'LEGACY: stop here for review; M0 cutover must archive these exact paths before H0.'))) }}

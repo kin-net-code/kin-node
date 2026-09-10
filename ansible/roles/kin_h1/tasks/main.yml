@@ -12,6 +12,7 @@
 - name: Inspect the required H0 state
   ansible.builtin.stat:
     path: "{{ kin_state_file }}"
+    follow: false
   register: kin_h1_prior_state_file
 
 - name: Require H0 before H1
@@ -20,6 +21,42 @@
       - kin_h1_prior_state_file.stat.exists
       - kin_h1_prior_state_file.stat.isreg
     fail_msg: H1 requires an accepted H0 state; apply and test H0 first.
+    quiet: true
+
+- name: Inspect the exact-source H0 receipt
+  ansible.builtin.stat:
+    path: "{{ kin_h0_receipt_file }}"
+    follow: false
+  register: kin_h1_h0_receipt_file
+
+- name: Require exact-source H0 acceptance before H1
+  ansible.builtin.assert:
+    that:
+      - kin_h1_h0_receipt_file.stat.exists
+      - kin_h1_h0_receipt_file.stat.isreg
+      - kin_h1_h0_receipt_file.stat.pw_name == 'root'
+      - kin_h1_h0_receipt_file.stat.gr_name == 'root'
+      - kin_h1_h0_receipt_file.stat.mode == '0644'
+    fail_msg: H1 requires the exact-source H0 receipt; apply and accept H0 first.
+    quiet: true
+
+- name: Read the exact-source H0 receipt
+  ansible.builtin.slurp:
+    src: "{{ kin_h0_receipt_file }}"
+  register: kin_h1_h0_receipt_raw
+
+- name: Decode the exact-source H0 receipt
+  ansible.builtin.set_fact:
+    kin_h1_h0_receipt: "{{ kin_h1_h0_receipt_raw.content | b64decode | from_json }}"
+
+- name: Require a matching H0 receipt
+  ansible.builtin.assert:
+    that:
+      - kin_h1_h0_receipt.schema == 'kin-config-level-receipt/v1'
+      - kin_h1_h0_receipt.config_level == 'H0'
+      - kin_h1_h0_receipt.source_commit == kin_source_commit
+      - kin_h1_h0_receipt.node_id == kin_node_id
+    fail_msg: H1 requires valid H0 acceptance evidence from this checkout and machine.
     quiet: true
 
 - name: Read the required H0 state
@@ -41,6 +78,29 @@
     fail_msg: H1 requires matching H0 state from this checkout and machine.
     quiet: true
 
+- name: Inspect H1 managed file targets before writing them
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop:
+    - "{{ kin_state_file }}"
+    - "{{ kin_h1_receipt_file }}"
+    - "{{ kin_status_command }}"
+  register: kin_h1_managed_file_stats
+  loop_control:
+    label: "{{ item }}"
+
+- name: Refuse symlinked or non-file H1 targets
+  ansible.builtin.assert:
+    that:
+      - not (item.stat.islnk | default(false))
+      - not item.stat.exists or item.stat.isreg
+    fail_msg: "H1 refuses unsafe managed file target: {{ item.item }}"
+    quiet: true
+  loop: "{{ kin_h1_managed_file_stats.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
 - name: Record the accepted source and machine identity
   ansible.builtin.copy:
     dest: "{{ kin_state_file }}"
@@ -50,6 +110,21 @@
     content: |
       {{ {
         'schema': 'kin-config-level-state/v1',
+        'config_level': 'H1',
+        'node_id': kin_node_id,
+        'source_commit': kin_source_commit
+      } | to_nice_json }}
+
+- name: Record immutable H1 source acceptance evidence
+  ansible.builtin.copy:
+    dest: "{{ kin_h1_receipt_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+    force: false
+    content: |
+      {{ {
+        'schema': 'kin-config-level-receipt/v1',
         'config_level': 'H1',
         'node_id': kin_node_id,
         'source_commit': kin_source_commit

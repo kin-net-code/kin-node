@@ -23,6 +23,11 @@
         path: "{{ kin_status_command }}"
       register: kin_h1_status_file_stat
 
+    - name: Inspect the exact-source H1 receipt
+      ansible.builtin.stat:
+        path: "{{ kin_h1_receipt_file }}"
+      register: kin_h1_receipt_file_stat
+
     - name: Require the H1 artifacts and permissions
       ansible.builtin.assert:
         that:
@@ -37,6 +42,11 @@
           - kin_h1_status_file_stat.stat.pw_name == 'root'
           - kin_h1_status_file_stat.stat.gr_name == 'root'
           - kin_h1_status_file_stat.stat.mode == '0755'
+          - kin_h1_receipt_file_stat.stat.exists
+          - kin_h1_receipt_file_stat.stat.isreg
+          - kin_h1_receipt_file_stat.stat.pw_name == 'root'
+          - kin_h1_receipt_file_stat.stat.gr_name == 'root'
+          - kin_h1_receipt_file_stat.stat.mode == '0644'
         fail_msg: H1 files or permissions are wrong.
         quiet: true
 
@@ -45,9 +55,15 @@
         src: "{{ kin_state_file }}"
       register: kin_h1_state_raw
 
+    - name: Read the exact-source H1 receipt
+      ansible.builtin.slurp:
+        src: "{{ kin_h1_receipt_file }}"
+      register: kin_h1_receipt_raw
+
     - name: Decode the H1 state record
       ansible.builtin.set_fact:
         kin_h1_state: "{{ kin_h1_state_raw.content | b64decode | from_json }}"
+        kin_h1_receipt: "{{ kin_h1_receipt_raw.content | b64decode | from_json }}"
 
     - name: Require the installed H1 state
       ansible.builtin.assert:
@@ -56,6 +72,10 @@
           - kin_h1_state.config_level == 'H1'
           - kin_h1_state.source_commit == kin_source_commit
           - kin_h1_state.node_id == kin_node_id
+          - kin_h1_receipt.schema == 'kin-config-level-receipt/v1'
+          - kin_h1_receipt.config_level == 'H1'
+          - kin_h1_receipt.source_commit == kin_source_commit
+          - kin_h1_receipt.node_id == kin_node_id
         fail_msg: Installed H1 state does not match this checkout or machine.
         quiet: true
 

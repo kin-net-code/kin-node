@@ -1,0 +1,167 @@
+---
+- name: Discover the in-place migration state
+  ansible.builtin.include_tasks: discover.yml
+
+- name: Require explicit approval for legacy service cutover
+  ansible.builtin.assert:
+    that:
+      - kin_m0_cutover_approved | bool
+    fail_msg: M0 cutover requires the controller's explicit stop-legacy approval flag.
+    quiet: true
+
+- name: Require systemd before changing service state
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['service_mgr'] == 'systemd'
+    fail_msg: M0 service cutover requires a systemd host.
+    quiet: true
+  when: kin_m0_manage_services | bool
+
+- name: Require legacy state or an existing cutover receipt
+  ansible.builtin.assert:
+    that:
+      - kin_m0_found_paths | length > 0 or kin_m0_cutover_receipt_exists
+    fail_msg: No native legacy Kin state was found; M0 is unnecessary.
+    quiet: true
+
+- name: Refuse symlinked or non-directory M0 containers
+  ansible.builtin.assert:
+    that:
+      - not (item.stat.islnk | default(false))
+      - not item.stat.exists or item.stat.isdir
+    fail_msg: "M0 refuses unsafe directory target: {{ item.item }}"
+    quiet: true
+  loop: "{{ kin_m0_container_stats.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Verify an already completed M0 cutover
+  ansible.builtin.include_tasks: verify.yml
+  when: kin_m0_cutover_receipt_exists
+
+- name: Capture and retire legacy Kin services
+  when: not kin_m0_cutover_receipt_exists
+  block:
+    - name: Refuse inconsistent pre-existing M0 capture artifacts
+      ansible.builtin.assert:
+        that:
+          - not kin_m0_archive_exists
+          - not kin_m0_capture_receipt_exists
+        fail_msg: Partial or unaccepted M0 capture artifacts require manual review.
+        quiet: true
+
+    - name: Measure legacy state before stopping services
+      ansible.builtin.command:
+        argv: "{{ ['/usr/bin/du', '--summarize', '--bytes', '--'] + kin_m0_found_paths }}"
+      register: kin_m0_pre_cutover_du
+      changed_when: false
+
+    - name: Read destination filesystem capacity before stopping services
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/df
+          - --output=avail
+          - --block-size=1
+          - "{{ kin_m0_effective_storage_probe }}"
+      register: kin_m0_pre_cutover_df
+      changed_when: false
+
+    - name: Require capture capacity before stopping services
+      ansible.builtin.assert:
+        that:
+          - >-
+            kin_m0_pre_cutover_df.stdout_lines[-1] | trim | int >=
+            (kin_m0_pre_cutover_du.stdout_lines
+             | map('regex_replace', '^([0-9]+).*$', '\1')
+             | map('int')
+             | sum) + (kin_m0_minimum_free_bytes | int)
+        fail_msg: M0 lacks the required free space; no legacy service was stopped.
+        quiet: true
+
+    - name: Remember the pre-cutover service state
+      ansible.builtin.set_fact:
+        kin_m0_pre_cutover_service_report: "{{ kin_m0_service_report }}"
+
+    - name: Stop exact legacy Kin services
+      ansible.builtin.systemd_service:
+        name: "{{ item.name }}"
+        state: stopped
+      when:
+        - kin_m0_manage_services | bool
+        - item.state != 'absent'
+      loop: "{{ kin_m0_pre_cutover_service_report }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Disable enabled legacy Kin services
+      ansible.builtin.systemd_service:
+        name: "{{ item.name }}"
+        enabled: false
+      when:
+        - kin_m0_manage_services | bool
+        - item.state != 'absent'
+        - item.status not in ['disabled', 'masked', 'static', 'absent']
+      loop: "{{ kin_m0_pre_cutover_service_report }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Refresh service state after cutover
+      ansible.builtin.service_facts:
+      when: kin_m0_manage_services | bool
+
+    - name: Initialize the post-cutover service report
+      ansible.builtin.set_fact:
+        kin_m0_post_service_report: []
+
+    - name: Build the post-cutover service report
+      ansible.builtin.set_fact:
+        kin_m0_post_service_report: >-
+          {{ kin_m0_post_service_report + [{
+            'name': item,
+            'state': ((ansible_facts.services[item].state | default('unknown'))
+              if item in (ansible_facts.services | default({})) else 'absent'),
+            'status': ((ansible_facts.services[item].status | default('unknown'))
+              if item in (ansible_facts.services | default({})) else 'absent')
+          }] }}
+      loop: "{{ kin_m0_services }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Use the post-cutover service report for capture
+      ansible.builtin.set_fact:
+        kin_m0_service_report: "{{ kin_m0_post_service_report }}"
+
+    - name: Capture the stopped legacy state
+      ansible.builtin.include_tasks: capture.yml
+
+    - name: Hash the accepted capture receipt
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/sha256sum
+          - --
+          - "{{ kin_m0_capture_receipt }}"
+      register: kin_m0_capture_receipt_hash
+      changed_when: false
+
+    - name: Record the completed cutover boundary
+      ansible.builtin.copy:
+        dest: "{{ kin_m0_cutover_receipt }}"
+        owner: root
+        group: root
+        mode: "0600"
+        force: false
+        content: |
+          {{ {
+            'schema': 'kin-m0-cutover-receipt/v1',
+            'node_id': kin_node_id,
+            'source_commit': kin_source_commit,
+            'cutover_at': ansible_facts['date_time']['iso8601'],
+            'capture_receipt': kin_m0_capture_receipt,
+            'capture_receipt_sha256': kin_m0_capture_receipt_hash.stdout.split()[0],
+            'managed_services': kin_m0_service_report,
+            'legacy_paths_left_in_place': true,
+            'destructive_deletion_performed': false
+          } | to_nice_json }}
+
+    - name: Verify the new M0 boundary
+      ansible.builtin.include_tasks: verify.yml

@@ -9,21 +9,31 @@
     fail_msg: H0 requires Ubuntu, Ansible 2.20.9, an exact Git commit and a stable node ID.
     quiet: true
 
-- name: Inspect legacy Kin paths
+- name: Require a clean host or accepted M0 migration evidence
+  ansible.builtin.include_role:
+    name: kin_m0
+    tasks_from: verify
+
+- name: Inspect H0 directory targets before managing them
   ansible.builtin.stat:
     path: "{{ item }}"
-  loop: "{{ kin_legacy_paths }}"
-  register: kin_h0_legacy_state
+    follow: false
+  loop:
+    - "{{ kin_config_dir }}"
+    - "{{ kin_state_dir }}"
+    - "{{ kin_receipts_dir }}"
+  register: kin_h0_target_directory_stats
   loop_control:
     label: "{{ item }}"
 
-- name: Refuse to configure over an old node
+- name: Refuse symlinked or non-directory H0 containers
   ansible.builtin.assert:
     that:
-      - not item.stat.exists
-    fail_msg: "Legacy Kin state exists at {{ item.item }}; use a fresh target for this MVP."
+      - not (item.stat.islnk | default(false))
+      - not item.stat.exists or item.stat.isdir
+    fail_msg: "H0 refuses unsafe directory target: {{ item.item }}"
     quiet: true
-  loop: "{{ kin_h0_legacy_state.results }}"
+  loop: "{{ kin_h0_target_directory_stats.results }}"
   loop_control:
     label: "{{ item.item }}"
 
@@ -46,11 +56,21 @@
   loop:
     - "{{ kin_config_dir }}"
     - "{{ kin_state_dir }}"
+    - "{{ kin_receipts_dir }}"
 
 - name: Inspect an existing config-level record
   ansible.builtin.stat:
     path: "{{ kin_state_file }}"
+    follow: false
   register: kin_h0_existing_state_file
+
+- name: Require an existing config-level record to be a regular file
+  ansible.builtin.assert:
+    that:
+      - not (kin_h0_existing_state_file.stat.islnk | default(false))
+      - not kin_h0_existing_state_file.stat.exists or kin_h0_existing_state_file.stat.isreg
+    fail_msg: Existing Kin config-level state is not a regular file.
+    quiet: true
 
 - name: Read an existing config-level record
   ansible.builtin.slurp:
@@ -69,13 +89,63 @@
     that:
       - kin_h0_existing_state.schema == 'kin-config-level-state/v1'
       - kin_h0_existing_state.config_level in ['H0', 'H1']
-      - kin_h0_existing_state.source_commit == kin_source_commit
+      - kin_h0_existing_state.source_commit is match('^[0-9a-f]{40}$')
       - kin_h0_existing_state.node_id == kin_node_id
-    fail_msg: Existing Kin state belongs to another level, source commit or machine.
+    fail_msg: Existing Kin state belongs to another schema, level or machine.
     quiet: true
   when: kin_h0_existing_state_file.stat.exists
 
-- name: Record H0 without downgrading H1
+- name: Preserve the prior source receipt before an upgrade
+  ansible.builtin.copy:
+    dest: >-
+      {{ kin_receipts_dir }}/{{ kin_h0_existing_state.source_commit }}-{{ kin_h0_existing_state.config_level }}.json
+    owner: root
+    group: root
+    mode: "0644"
+    force: false
+    content: |
+      {{ kin_h0_existing_state | to_nice_json }}
+  when:
+    - kin_h0_existing_state_file.stat.exists
+    - kin_h0_existing_state.source_commit != kin_source_commit
+
+- name: Select the honest H0 boundary for this source
+  ansible.builtin.set_fact:
+    kin_h0_target_level: >-
+      {{ kin_h0_existing_state.config_level
+         if (kin_h0_existing_state_file.stat.exists and
+             kin_h0_existing_state.source_commit == kin_source_commit)
+         else 'H0' }}
+
+- name: Inspect H0 managed file targets before writing them
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop:
+    - "{{ kin_status_command }}"
+    - "{{ kin_h0_receipt_file }}"
+  register: kin_h0_managed_file_stats
+  loop_control:
+    label: "{{ item }}"
+
+- name: Refuse symlinked or non-file H0 targets
+  ansible.builtin.assert:
+    that:
+      - not (item.stat.islnk | default(false))
+      - not item.stat.exists or item.stat.isreg
+    fail_msg: "H0 refuses unsafe managed file target: {{ item.item }}"
+    quiet: true
+  loop: "{{ kin_h0_managed_file_stats.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Remove a prior-source H1 status capability until H1 is reapplied
+  ansible.builtin.file:
+    path: "{{ kin_status_command }}"
+    state: absent
+  when: kin_h0_target_level == 'H0'
+
+- name: Record the H0 boundary for this exact source
   ansible.builtin.copy:
     dest: "{{ kin_state_file }}"
     owner: root
@@ -84,10 +154,22 @@
     content: |
       {{ {
         'schema': 'kin-config-level-state/v1',
+        'config_level': kin_h0_target_level,
+        'node_id': kin_node_id,
+        'source_commit': kin_source_commit
+      } | to_nice_json }}
+
+- name: Record immutable H0 source acceptance evidence
+  ansible.builtin.copy:
+    dest: "{{ kin_h0_receipt_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+    force: false
+    content: |
+      {{ {
+        'schema': 'kin-config-level-receipt/v1',
         'config_level': 'H0',
         'node_id': kin_node_id,
         'source_commit': kin_source_commit
       } | to_nice_json }}
-  when: >-
-    not kin_h0_existing_state_file.stat.exists or
-    kin_h0_existing_state.config_level == 'H0'

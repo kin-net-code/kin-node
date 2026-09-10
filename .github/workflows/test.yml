@@ -14,5 +14,16 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v6
-      - name: Test H0 and H1 in Ubuntu 26.04
+      - name: Test M0, H0 and H1 in Ubuntu 26.04
         run: ./container-test
+
+  host-m0-systemd:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+      - name: Install the pinned controller toolchain
+        run: ./bootstrap-controller
+      - name: Test M0 against an ephemeral systemd service
+        run: ./tests/systemd-migration.sh

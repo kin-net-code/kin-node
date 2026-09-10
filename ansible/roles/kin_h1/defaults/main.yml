@@ -4,3 +4,6 @@ kin_config_dir: /etc/kin-net
 kin_state_dir: /var/lib/kin-net
 kin_state_file: /var/lib/kin-net/config-level.json
 kin_status_command: /usr/local/bin/kin-node-status
+kin_receipts_dir: /var/lib/kin-net/receipts
+kin_h0_receipt_file: "{{ kin_receipts_dir }}/{{ kin_source_commit }}-H0.json"
+kin_h1_receipt_file: "{{ kin_receipts_dir }}/{{ kin_source_commit }}-H1.json"

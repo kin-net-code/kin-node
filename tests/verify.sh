@@ -13,10 +13,14 @@ ansible_playbook=${KIN_ANSIBLE_PLAYBOOK:-$(command -v ansible-playbook || true)}
 executable_sources=(
   "$tool_root/test"
   "$tool_root/container-test"
+  "$tool_root/bootstrap-controller"
   "$tool_root/kin-node"
   "$tool_root/tests/acceptance.sh"
   "$tool_root/tests/container-live.sh"
   "$tool_root/tests/convergence.sh"
+  "$tool_root/tests/migration.sh"
+  "$tool_root/tests/systemd-migration.sh"
+  "$tool_root/tests/systemd-migration.sh"
 )
 
 for executable_source in "${executable_sources[@]}"; do
@@ -29,6 +33,7 @@ grep -Fq 'ansible-core==2.20.9' "$tool_root/requirements-test.txt"
 grep -Fq 'docker|podman' "$tool_root/container-test"
 grep -Fq 'uses: actions/checkout@v6' "$tool_root/.github/workflows/test.yml"
 grep -Fq 'run: ./container-test' "$tool_root/.github/workflows/test.yml"
+grep -Fq 'run: ./tests/systemd-migration.sh' "$tool_root/.github/workflows/test.yml"
 
 if grep -ERn -i 'vagrant|virtualbox|bento' \
   "$tool_root/Containerfile" \
@@ -47,10 +52,12 @@ fi
 
 dummy_commit=0000000000000000000000000000000000000000
 dummy_node=11111111111111111111111111111111
-for playbook in h0.yml h0-acceptance.yml h1.yml h1-acceptance.yml; do
+for playbook in \
+  m0-inspect.yml m0-cutover.yml m0-acceptance.yml \
+  h0.yml h0-acceptance.yml h1.yml h1-acceptance.yml; do
   ANSIBLE_CONFIG="$ansible_root/ansible.cfg" "$ansible_playbook" \
     --inventory "$ansible_root/inventory.ini" \
-    --extra-vars "{\"kin_source_commit\":\"$dummy_commit\",\"kin_node_id\":\"$dummy_node\",\"kin_target_distribution\":\"Ubuntu\"}" \
+    --extra-vars "{\"kin_source_commit\":\"$dummy_commit\",\"kin_node_id\":\"$dummy_node\",\"kin_target_distribution\":\"Ubuntu\",\"kin_m0_manage_services\":false}" \
     --syntax-check "$ansible_root/playbooks/$playbook"
 done
 
@@ -71,4 +78,12 @@ fi
 grep -Fq 'H1 requires an accepted H0 state' \
   "$ansible_root/roles/kin_h1/tasks/main.yml"
 
-printf 'PASS  H0_H1_STATIC_ACCEPTANCE\n'
+grep -Fq 'destructive_deletion_performed' \
+  "$ansible_root/roles/kin_m0/tasks/cutover.yml"
+grep -Fq 'legacy-rootfs.tar.gz' "$ansible_root/group_vars/all.yml"
+if grep -ERn 'openbao' "$ansible_root/roles/kin_m0/tasks"; then
+  printf 'FAIL  M0 task logic must not manipulate ambiguous OpenBao resources\n' >&2
+  exit 1
+fi
+
+printf 'PASS  M0_H0_H1_STATIC_ACCEPTANCE\n'

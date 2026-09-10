@@ -1,0 +1,11 @@
+---
+- name: Inspect a host before in-place Kin migration
+  hosts: kin_node
+  become: true
+  gather_facts: true
+  any_errors_fatal: true
+
+  roles:
+    - role: kin_m0
+      vars:
+        kin_m0_action: inspect
